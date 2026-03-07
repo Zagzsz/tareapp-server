@@ -89,8 +89,9 @@ async function scrapeAcademicManager(username, password) {
     for (let i = 0; i < eventCount; i++) {
         console.log(`Procesando ${i + 1}/${eventCount}...`);
         try {
-          // ASEGURARNOS DE QUE NO HAY MODALES PREVIOS BLOQUEANDO (Cruce de seguridad)
+          // Asegurarnos de que el calendario está despejado
           await cerrarModal(page);
+          await new Promise(r => setTimeout(r, 1000));
 
           // Obtener las coordenadas del centro del evento
           const rect = await page.evaluate((idx) => {
@@ -115,21 +116,29 @@ async function scrapeAcademicManager(username, password) {
           // Esperar a que el modal aparezca
           const modalVisible = await page.waitForSelector('.modal-content, .ui-dialog, [id*="pnlDetalleActividad"]', { 
             visible: true, 
-            timeout: 12000 
+            timeout: 10000 
           }).catch(async () => {
-             const path = `/tmp/error_click_evento_${i+1}.png`;
-             await page.screenshot({ path });
-             console.log(`  📸 Error: El modal no abrió. Foto en: ${path}`);
-             return null;
+             // Re-intento si el primer clic falló (pasa a veces en ASP.NET)
+             console.log(`  ↻ Re-intentando clic en evento ${i + 1}...`);
+             await page.mouse.click(rect.x, rect.y);
+             return await page.waitForSelector('.modal-content, .ui-dialog, [id*="pnlDetalleActividad"]', { 
+               visible: true, 
+               timeout: 5000 
+             }).catch(() => null);
           });
   
-          if (!modalVisible) continue;
+          if (!modalVisible) {
+            const path = `/tmp/error_click_evento_${i+1}.png`;
+            await page.screenshot({ path });
+            console.log(`  📸 Error: El modal no abrió. Foto en: ${path}`);
+            continue;
+          }
 
           // Espera a que el contenido AJAX se cargue realmente en el modal
-          await new Promise(r => setTimeout(r, 3000));
+          await new Promise(r => setTimeout(r, 2000));
           await waitForAjaxIdle(page, 4000);
 
-          // ── EXTRACCIÓN (Pinpoint v10) ─────────────────────────────────────
+          // ── EXTRACCIÓN (Pinpoint v11) ─────────────────────────────────────
           const detail = await page.evaluate(() => {
             const modal = document.querySelector('[id*="pnlDetalleActividad"]') || 
                           document.querySelector('.modal-content') || 
@@ -153,7 +162,7 @@ async function scrapeAcademicManager(username, password) {
             const descEl = modal.querySelector('.descripActividad') || modal.querySelector('p');
             if (descEl) description = descEl.innerText.trim();
 
-            // 4. Fecha de entrega (Regex sobre el texto del modal)
+            // 4. Fecha de entrega
             let dueDate = null;
             const dateMatch = fullText.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
             if (dateMatch) {
@@ -169,15 +178,15 @@ async function scrapeAcademicManager(username, password) {
             console.log(`  ✓ OK: ${detail.title} - ${detail.dueDate}`);
             tasks.push(detail);
           } else {
-            console.warn(`  ✗ Datos incompletos en tarea ${i + 1}. No se agregará.`);
+            console.warn(`  ✗ Datos incompletos en tarea ${i + 1}.`);
           }
 
       } catch (err) {
         console.warn(`  Error en evento ${i + 1}:`, err.message);
       } finally {
-        // Cierre AGRESIVO del modal para la siguiente iteración
+        // Cierre y espera activa del postback que genera el botón
         await cerrarModal(page);
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 1000));
       }
     }
 
@@ -208,37 +217,32 @@ async function waitForAjaxIdle(page, fallbackMs = 2500) {
 }
 
 async function cerrarModal(page) {
-  await page.evaluate(() => {
-    // 1. Intentar clic en botones de cerrar conocidos
+  // Intentar clic en botones de cerrar (genera Postback en ASP.NET)
+  const closed = await page.evaluate(() => {
     const closeSelectors = [
       '[id*="lnkCerrar"]', '[id*="btnCerrar"]', '.modal-header .close',
-      '.ui-dialog-titlebar-close', 'button.close', '.close', '.ui-icon-closethick'
+      '.ui-dialog-titlebar-close', 'button.close'
     ];
-    closeSelectors.forEach(sel => {
+    for (const sel of closeSelectors) {
       const btn = document.querySelector(sel);
-      if (btn && btn.offsetParent !== null) btn.click();
-    });
-
-    // 2. Forzar cierre con Escape
+      if (btn && btn.offsetParent !== null) {
+        btn.click();
+        return true;
+      }
+    }
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-
-    // 3. AGRESIVO: Eliminar cualquier modal o backdrop que bloquee el calendario
-    const blockers = document.querySelectorAll('.modal, .modal-backdrop, .ui-dialog, .ui-widget-overlay, [id*="pnlDetalleActividad"]');
-    blockers.forEach(el => {
-        if (el) {
-            el.style.display = 'none';
-            el.style.pointerEvents = 'none';
-            el.classList.remove('show', 'in');
-        }
-    });
-    
-    // Limpiar clases del body que bloquean el scroll
-    document.body.classList.remove('modal-open');
-    document.body.style.overflow = 'auto';
+    return false;
   });
 
-  // Esperar un momento a que el DOM se asiente
-  await new Promise(r => setTimeout(r, 1000));
+  if (closed) {
+    await waitForAjaxIdle(page, 3000);
+  }
+
+  // Verificar si sigue algo bloqueando y limpiarlo suavemente
+  await page.evaluate(() => {
+    const blockers = document.querySelectorAll('.modal-backdrop, .ui-widget-overlay');
+    blockers.forEach(el => { el.style.display = 'none'; });
+  });
 }
 
 module.exports = { scrapeAcademicManager };
