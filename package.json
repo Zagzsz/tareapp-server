@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "electron-dev": "concurrently \"vite\" \"electron .\"",
+    "dist-exe": "vite build && electron-builder --win nsis",
     "test": "echo \"No tests\" && exit 0"
   },
   "engines": {
@@ -21,12 +22,12 @@
   "type": "commonjs",
   "dependencies": {
     "cors": "^2.8.6",
+    "date-fns": "^4.1.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "multer": "^2.1.1",
     "mysql2": "^3.19.0",
     "node-cron": "^4.2.1",
-    "date-fns": "^4.1.0",
     "puppeteer": "^24.38.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -35,6 +36,18 @@
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
     "electron": "^34.1.0",
+    "electron-builder": "^26.8.1",
     "vite": "^6.1.1"
+  },
+  "build": {
+    "appId": "com.zagzsz.tareapp",
+    "productName": "TareApp",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico"
+    }
   }
 }
