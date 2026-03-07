@@ -1,180 +1,241 @@
 const puppeteer = require('puppeteer');
 
-/**
- * Scraper para extraer tareas de Academic Manager (ueh.academic.lat)
- * @param {string} username - Usuario de la plataforma
- * @param {string} password - Contraseña
- * @returns {Promise<Array>} - Lista de tareas encontradas
- */
 async function scrapeAcademicManager(username, password) {
   let browser;
   try {
-    // Configuración para Render (usa el ejecutable de Chrome si está disponible)
     browser = await puppeteer.launch({
       headless: "new",
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--single-process',
+        '--no-zygote',
+        '--disable-gpu',
+        '--disable-dev-shm-usage',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-sync',
+        '--disable-translate',
+        '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+        '--mute-audio',
+        '--no-first-run',
+        '--safebrowsing-disable-auto-update',
+        '--disable-accelerated-2d-canvas',
+        '--disable-infobars',
+      ],
     });
 
     const page = await browser.newPage();
-    
-    // 1. Ir al Login
-    console.log('Navegando a login...');
-    // Aumentar el timeout por defecto y usar domcontentloaded que es más rápido
-    await page.setDefaultNavigationTimeout(60000); 
-    await page.goto('https://ueh.academic.lat/Autenticacion.aspx', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    // 2. Llenar Credenciales (IDs verificados por el subagente)
-    console.log('Ingresando credenciales...');
+    // Bloquear recursos innecesarios → menos RAM y más velocidad
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const type = req.resourceType();
+      if (['image', 'stylesheet', 'font', 'media', 'other'].includes(type)) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
+    await page.setViewport({ width: 1024, height: 768 });
+    await page.setDefaultNavigationTimeout(60000);
+
+    // ── 1. LOGIN ────────────────────────────────────────────────────────────
+    console.log('Navegando a login...');
+    await page.goto('https://ueh.academic.lat/Autenticacion.aspx', {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000
+    });
+
     await page.waitForSelector('#txtUsuario', { timeout: 30000 });
     await page.type('#txtUsuario', username);
     await page.type('#txtContrasenia', password);
-    
-    // El botón de entrar es un enlace que hace postback
-    console.log('Haciendo clic en Entrar...');
+
     await Promise.all([
       page.click('#lnkEntrar'),
-      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 60000 }).catch(() => console.log("Aviso: Navegación lenta tras login."))
+      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 60000 })
+        .catch(() => console.log('Aviso: navegación lenta tras login'))
     ]);
 
-    // Verificar si seguimos en Login (Login fallido)
-    const isStillOnLogin = await page.$('#txtUsuario');
-    if (isStillOnLogin) {
-      console.error('Error: Las credenciales parecen ser incorrectas o hubo un error en el portal.');
+    if (await page.$('#txtUsuario')) {
       throw new Error('Login fallido en Academic Manager');
     }
 
-    // 3. Navegar a Actividades
+    // ── 2. CALENDARIO ───────────────────────────────────────────────────────
     console.log('Navegando a actividades...');
-    await page.goto('https://ueh.academic.lat/Alumno/AlumnoActividadesClase.aspx', { waitUntil: 'networkidle0', timeout: 60000 });
-    
-    // Esperar explícitamente a que el calendario cargue (FullCalendar)
-    console.log('Esperando el calendario...');
-    await page.waitForSelector('.fc-view-container, #calendar', { timeout: 30000 });
-
-    // 4. Extraer eventos del Calendario
-    console.log('Detectando eventos en el calendario...');
-    
-    // Obtenemos la cantidad de eventos primero
-    const eventCount = await page.evaluate(() => {
-      return document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event').length;
+    await page.goto('https://ueh.academic.lat/Alumno/AlumnoActividadesClase.aspx', {
+      waitUntil: 'networkidle0',
+      timeout: 60000
     });
 
-    const tasks = [];
-    console.log(`Procesando ${eventCount} eventos detalladamente...`);
+    await page.waitForSelector('.fc-event, .fc-daygrid-event, .calendar-event', {
+      timeout: 30000
+    });
+    await new Promise(r => setTimeout(r, 2000));
 
+    // ── 3. CONTAR EVENTOS ───────────────────────────────────────────────────
+    const eventCount = await page.evaluate(() =>
+      document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event').length
+    );
+
+    console.log(`Encontrados ${eventCount} eventos`);
+    const tasks = [];
+
+    // ── 4. ITERAR ───────────────────────────────────────────────────────────
     for (let i = 0; i < eventCount; i++) {
+      console.log(`Procesando ${i + 1}/${eventCount}...`);
       try {
-        console.log(`Procesando tarea ${i + 1}/${eventCount}...`);
-        
-        // RE-BUSCAR el elemento por índice en cada iteración para evitar "Protocol Error"
+
         await page.evaluate((idx) => {
           const events = document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event');
           if (events[idx]) {
-            events[idx].scrollIntoView();
+            events[idx].scrollIntoView({ block: 'center' });
             events[idx].click();
           }
         }, i);
-        
-        // Esperar el modal específico
-        await page.waitForSelector('[id*="pnlDetalleActividad"], [id*="DetalleActividad"], .modal-content', { timeout: 10000 });
-        await new Promise(r => setTimeout(r, 1200)); // Un poco más de tiempo para carga de datos AJAX
 
+        // Esperar modal visible por contenido
+        const modalVisible = await page.waitForFunction(() => {
+          const all = document.querySelectorAll('*');
+          for (const el of all) {
+            if (
+              el.offsetParent !== null &&
+              el.children.length > 0 &&
+              el.innerText?.includes('Detalle de Actividad')
+            ) return true;
+          }
+          return false;
+        }, { timeout: 10000 }).catch(() => null);
+
+        if (!modalVisible) {
+          console.warn(`  ⚠ Modal no apareció (evento ${i + 1})`);
+          await cerrarModal(page);
+          continue;
+        }
+
+        await waitForAjaxIdle(page, 2500);
+
+        // ── EXTRACCIÓN ──────────────────────────────────────────────────────
         const detail = await page.evaluate(() => {
-          const modal = document.querySelector('[id*="pnlDetalleActividad"]') || 
-                        document.querySelector('[id*="DetalleActividad"]') || 
-                        document.querySelector('.modal-content');
-          if (!modal) return { error: "Modal no encontrado" };
+          // Encontrar el contenedor del modal visible más específico
+          let modal = null;
+          const all = document.querySelectorAll('div, section, article');
+          for (const el of all) {
+            if (el.offsetParent !== null && el.innerText?.includes('Detalle de Actividad')) {
+              if (!modal || el.querySelectorAll('*').length < modal.querySelectorAll('*').length) {
+                modal = el;
+              }
+            }
+          }
+          if (!modal) return null;
 
-          const fullText = (modal.innerText || "").trim().replace(/\s+/g, ' ');
-          
-          // Debug: Retornamos los primeros 200 caracteres para ver qué lee el bot en los logs de Render
-          const debugSnippet = fullText.substring(0, 200);
+          const fullText = modal.innerText.trim().replace(/\s+/g, ' ');
 
-          // 1. Materia/Asignatura
-          let category = "General";
-          const asignaturaEl = modal.querySelector('.h-Title-S') || 
-                               modal.querySelector('h5') || 
-                               modal.querySelector('[class*="Asignatura"]');
-          if (asignaturaEl) category = asignaturaEl.innerText.trim();
-
-          // 2. Título (Evitar el genérico)
-          let title = "Tarea sin título";
-          const titleEl = modal.querySelector('.h-Title') || 
-                          modal.querySelector('h2, h3, .titulo');
-          
-          if (titleEl && !titleEl.innerText.includes("Detalle de Actividad")) {
-            title = titleEl.innerText.trim();
-          } else {
-            const h3s = Array.from(modal.querySelectorAll('h3, h2, .h-Title'));
-            const realTitle = h3s.find(el => !el.innerText.includes("Detalle de"));
-            if (realTitle) title = realTitle.innerText.trim();
+          // — Asignatura desde el header: "Detalle de Actividad - IM Control analógico"
+          let category = 'General';
+          const headerEl = modal.querySelector(
+            '.modal-header, [class*="header"], .ui-dialog-titlebar, h5, .h-Title-S'
+          );
+          if (headerEl) {
+            const headerText = headerEl.innerText.trim();
+            const dashIdx = headerText.indexOf(' - ');
+            if (dashIdx !== -1) category = headerText.substring(dashIdx + 3).trim();
           }
 
-          // 3. Fecha de entrega (Ultra-resiliente)
+          // — Título: primer heading que no sea el genérico del header
+          let title = 'Tarea sin título';
+          for (const h of modal.querySelectorAll('h1, h2, h3, h4')) {
+            const t = h.innerText.trim();
+            if (t.length > 3 && !t.toLowerCase().includes('detalle de actividad')) {
+              title = t;
+              break;
+            }
+          }
+
+          // — Fecha de entrega: DD/MM/YYYY HH:mm → YYYY-MM-DD HH:mm:ss (formato MySQL DATETIME)
           let dueDate = null;
-          // Buscar primero por el selector que vimos (.dv-right-section)
-          const dateEl = modal.querySelector('[id*="lblFechaEntrega"]') || 
-                         modal.querySelector('[id*="lblFechaFin"]') ||
-                         modal.querySelector('.dv-right-section');
-          
-          const textToSearch = dateEl ? dateEl.innerText + " " + fullText : fullText;
-          
-          // Regex mejorada: DD/MM/YYYY seguido de HH:mm (permite espacios extras)
-          const match = textToSearch.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
-          if (match) {
-            const [_, date, time] = match;
-            const [d, m, y] = date.split('/');
-            dueDate = `${y}-${m}-${d} ${time}:00`;
+          const dateMatches = [...fullText.matchAll(/(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}:\d{2})/g)];
+
+          if (dateMatches.length > 0) {
+            const last = dateMatches[dateMatches.length - 1];
+            const [d, m, y] = last[1].split('/');
+            const timePart = last[2]; // "15:00"
+            dueDate = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')} ${timePart}:00`;
           }
 
-          return { title, category, dueDate, debugSnippet };
+          return { title, category, dueDate, debugSnippet: fullText.substring(0, 400) };
         });
 
-        if (detail && detail.dueDate) {
-          console.log(`- [OK] Tarea ${i + 1}: ${detail.title} | Fecha: ${detail.dueDate}`);
+        if (detail?.dueDate) {
+          console.log(`  ✓ "${detail.title}" | ${detail.category} | ${detail.dueDate}`);
           tasks.push({
             title: detail.title,
             category: detail.category,
             dueDate: detail.dueDate,
-            description: `Sincronizado de Academic Manager\nExtracto: ${detail.debugSnippet}...`
+            description: 'Sincronizado de Academic Manager'
           });
         } else {
-          console.log(`- [ERROR] Tarea ${i + 1}: No se detectó fecha. Texto visto: "${detail ? detail.debugSnippet : 'N/A'}"`);
+          console.warn(`  ✗ Sin fecha. Snippet: "${detail?.debugSnippet ?? 'N/A'}"`);
         }
 
-        // Cerrar el modal mediante JS directo al botón de cierre
-        await page.evaluate(() => {
-          const closeBtn = document.querySelector('[id*="lnkCerrarDetalleActividad"]') || 
-                           document.querySelector('.close') || 
-                           document.querySelector('[id*="lnkCerrar"]');
-          if (closeBtn) closeBtn.click();
-          else window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-        });
-        
-        // Esperar a que el modal desaparezca totalmente
-        await page.waitForFunction(() => {
-          const modal = document.querySelector('[id*="pnlDetalleActividad"], .modal-backdrop, .modal-content');
-          return !modal || modal.offsetParent === null;
-        }, { timeout: 5000 }).catch(() => {});
-        
-        await new Promise(r => setTimeout(r, 1000));
-
       } catch (err) {
-        console.warn(`Error en tarea índice ${i}:`, err.message);
-        await page.keyboard.press('Escape').catch(() => {});
-        await new Promise(r => setTimeout(r, 1500));
+        console.warn(`  Error evento ${i + 1}:`, err.message);
+      } finally {
+        await cerrarModal(page);
+        await new Promise(r => setTimeout(r, 600));
       }
     }
 
-    console.log(`Sincronización terminada. ${tasks.length} tareas válidas procesadas.`);
+    console.log(`\n✅ ${tasks.length}/${eventCount} tareas válidas`);
     return tasks;
 
   } catch (error) {
-    console.error('Error en el scraping:', error);
+    console.error('Error crítico:', error);
     throw error;
   } finally {
     if (browser) await browser.close();
   }
+}
+
+// ── HELPERS ──────────────────────────────────────────────────────────────────
+
+async function waitForAjaxIdle(page, fallbackMs = 2500) {
+  try {
+    await page.waitForFunction(() => {
+      if (typeof Sys !== 'undefined' && Sys.WebForms?.PageRequestManager) {
+        return !Sys.WebForms.PageRequestManager.getInstance().get_isInAsyncPostBack();
+      }
+      return true;
+    }, { timeout: fallbackMs });
+  } catch {
+    await new Promise(r => setTimeout(r, fallbackMs));
+  }
+}
+
+async function cerrarModal(page) {
+  await page.evaluate(() => {
+    for (const sel of [
+      '[id*="lnkCerrar"]',
+      '[id*="btnCerrar"]',
+      '.modal-header .close',
+      '.ui-dialog-titlebar-close',
+      'button.close',
+      '.close'
+    ]) {
+      const btn = document.querySelector(sel);
+      if (btn && btn.offsetParent !== null) { btn.click(); return; }
+    }
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+
+  await page.waitForFunction(() => {
+    const all = document.querySelectorAll('div');
+    for (const el of all) {
+      if (el.offsetParent !== null && el.innerText?.includes('Detalle de Actividad')) return false;
+    }
+    return true;
+  }, { timeout: 4000 }).catch(() => { });
 }
 
 module.exports = { scrapeAcademicManager };
