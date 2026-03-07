@@ -19,15 +19,19 @@ async function scrapeAcademicManager(username, password) {
     
     // 1. Ir al Login
     console.log('Navegando a login...');
-    await page.goto('https://ueh.academic.lat/Alumno/AlumnoPerfil.aspx', { waitUntil: 'networkidle2' });
+    await page.goto('https://ueh.academic.lat/Autenticacion.aspx', { waitUntil: 'networkidle2' });
 
-    // 2. Llenar Credenciales (Suponiendo IDs estándar basados en ASP.NET)
-    // Nota: Estos IDs son estimaciones, podrían cambiar.
-    await page.type('#TxtUsuario', username);
-    await page.type('#TxtPassword', password);
-    await page.click('#BtnAceptar');
+    // 2. Llenar Credenciales (IDs verificados por el subagente)
+    console.log('Ingresando credenciales...');
+    await page.waitForSelector('#txtUsuario');
+    await page.type('#txtUsuario', username);
+    await page.type('#txtContrasenia', password);
     
-    await page.waitForNavigation({ waitUntil: 'networkidle2' });
+    // El botón de entrar es un enlace que hace postback
+    await Promise.all([
+      page.click('#lnkEntrar'),
+      page.waitForNavigation({ waitUntil: 'networkidle2' })
+    ]);
 
     // 3. Navegar a Actividades
     console.log('Navegando a actividades...');
