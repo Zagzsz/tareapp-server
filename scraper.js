@@ -83,66 +83,63 @@ async function scrapeAcademicManager(username, password) {
           const modal = document.querySelector('[id*="pnlDetalleActividad"]') || 
                         document.querySelector('[id*="DetalleActividad"]') || 
                         document.querySelector('.modal-content');
-          if (!modal) return null;
+          if (!modal) return { error: "Modal no encontrado" };
 
-          const fullText = (modal.innerText || "").trim();
+          const fullText = (modal.innerText || "").trim().replace(/\s+/g, ' ');
           
-          // 1. Materia/Asignatura (Selector pinpoint: .h-Title-S)
+          // Debug: Retornamos los primeros 200 caracteres para ver qué lee el bot en los logs de Render
+          const debugSnippet = fullText.substring(0, 200);
+
+          // 1. Materia/Asignatura
           let category = "General";
           const asignaturaEl = modal.querySelector('.h-Title-S') || 
                                modal.querySelector('h5') || 
                                modal.querySelector('[class*="Asignatura"]');
-          if (asignaturaEl) {
-            category = asignaturaEl.innerText.trim();
-          }
+          if (asignaturaEl) category = asignaturaEl.innerText.trim();
 
-          // 2. Título (Selector pinpoint: .h-Title)
+          // 2. Título (Evitar el genérico)
           let title = "Tarea sin título";
           const titleEl = modal.querySelector('.h-Title') || 
                           modal.querySelector('h2, h3, .titulo');
+          
           if (titleEl && !titleEl.innerText.includes("Detalle de Actividad")) {
             title = titleEl.innerText.trim();
-          }
-          
-          // Si el título sigue siendo genérico o vacío, buscar en h3 dentro del contenido
-          if (title.includes("Detalle de Actividad") || title === "Tarea sin título") {
-             const candidate = modal.querySelector('.modal-body h3, .modal-body h4, .h-Title');
-             if (candidate) title = candidate.innerText.trim();
+          } else {
+            const h3s = Array.from(modal.querySelectorAll('h3, h2, .h-Title'));
+            const realTitle = h3s.find(el => !el.innerText.includes("Detalle de"));
+            if (realTitle) title = realTitle.innerText.trim();
           }
 
-          // 3. Fecha de entrega (Selector pinpoint: [id*="lblFechaEntrega"] o similar en panel derecho)
+          // 3. Fecha de entrega (Ultra-resiliente)
+          let dueDate = null;
+          // Buscar primero por el selector que vimos (.dv-right-section)
           const dateEl = modal.querySelector('[id*="lblFechaEntrega"]') || 
                          modal.querySelector('[id*="lblFechaFin"]') ||
-                         modal.querySelector('.dv-right-section div:nth-child(2) > div:nth-child(2)');
+                         modal.querySelector('.dv-right-section');
           
-          let dueDate = null;
-          let dateStr = dateEl ? dateEl.innerText.trim() : "";
+          const textToSearch = dateEl ? dateEl.innerText + " " + fullText : fullText;
           
-          // Fallback al regex si el selector directo falla o el texto es vacío
-          if (!dateStr || !dateStr.includes("/")) {
-            const match = fullText.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
-            if (match) {
-              const [_, date, time] = match;
-              const [d, m, y] = date.split('/');
-              dueDate = `${y}-${m}-${d} ${time}:00`;
-            }
-          } else {
-            const match = dateStr.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
-            if (match) {
-              const [_, date, time] = match;
-              const [d, m, y] = date.split('/');
-              dueDate = `${y}-${m}-${d} ${time}:00`;
-            }
+          // Regex mejorada: DD/MM/YYYY seguido de HH:mm (permite espacios extras)
+          const match = textToSearch.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
+          if (match) {
+            const [_, date, time] = match;
+            const [d, m, y] = date.split('/');
+            dueDate = `${y}-${m}-${d} ${time}:00`;
           }
 
-          return { title, category, dueDate, description: `Sincronizado de Academic Manager\n${fullText.substring(0, 400)}` };
+          return { title, category, dueDate, debugSnippet };
         });
 
         if (detail && detail.dueDate) {
-          console.log(`- Encontrada: ${detail.title} | Materia: ${detail.category} | Fecha: ${detail.dueDate}`);
-          tasks.push(detail);
+          console.log(`- [OK] Tarea ${i + 1}: ${detail.title} | Fecha: ${detail.dueDate}`);
+          tasks.push({
+            title: detail.title,
+            category: detail.category,
+            dueDate: detail.dueDate,
+            description: `Sincronizado de Academic Manager\nExtracto: ${detail.debugSnippet}...`
+          });
         } else {
-          console.log(`- Aviso: No se pudo extraer la fecha para la tarea ${i + 1}.`);
+          console.log(`- [ERROR] Tarea ${i + 1}: No se detectó fecha. Texto visto: "${detail ? detail.debugSnippet : 'N/A'}"`);
         }
 
         // Cerrar el modal mediante JS directo al botón de cierre
