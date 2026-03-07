@@ -30,62 +30,69 @@ async function scrapeAcademicManager(username, password) {
     await page.type('#txtContrasenia', password);
     
     // El botón de entrar es un enlace que hace postback
+    console.log('Haciendo clic en Entrar...');
     await Promise.all([
       page.click('#lnkEntrar'),
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 })
+      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 60000 }).catch(() => console.log("Aviso: Navegación lenta tras login."))
     ]);
+
+    // Verificar si seguimos en Login (Login fallido)
+    const isStillOnLogin = await page.$('#txtUsuario');
+    if (isStillOnLogin) {
+      console.error('Error: Las credenciales parecen ser incorrectas o hubo un error en el portal.');
+      throw new Error('Login fallido en Academic Manager');
+    }
 
     // 3. Navegar a Actividades
     console.log('Navegando a actividades...');
-    await page.goto('https://ueh.academic.lat/Alumno/AlumnoActividadesClase.aspx', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto('https://ueh.academic.lat/Alumno/AlumnoActividadesClase.aspx', { waitUntil: 'networkidle0', timeout: 60000 });
     
-    // Esperar explícitamente a que el calendario cargue
+    // Esperar explícitamente a que el calendario cargue (FullCalendar)
     console.log('Esperando el calendario...');
-    await page.waitForSelector('.fc-view-container, #calendar, .fc-event', { timeout: 30000 }).catch(e => console.log("Aviso: El calendario tardó demasiado o no se encontró."));
+    await page.waitForSelector('.fc-view-container, #calendar', { timeout: 30000 });
 
     // 4. Extraer eventos del Calendario
     console.log('Detectando eventos en el calendario...');
-    const pageTitle = await page.title();
-    console.log(`Título de la página actual: ${pageTitle}`);
     
-    const eventSelectors = await page.evaluate(() => {
-      // Los eventos suelen tener clases fc-event o similares en FullCalendar
-      return Array.from(document.querySelectorAll('.fc-event, .calendar-event'))
-        .map((el, i) => {
-          if (!el.id) el.id = `evt-${Date.now()}-${i}`;
-          return `#${el.id}`;
-        });
+    // Obtenemos la cantidad de eventos primero
+    const eventCount = await page.evaluate(() => {
+      return document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event').length;
     });
 
     const tasks = [];
-    console.log(`Procesando ${eventSelectors.length} eventos detalladamente...`);
+    console.log(`Procesando ${eventCount} eventos detalladamente...`);
 
-    for (const selector of eventSelectors) {
+    for (let i = 0; i < eventCount; i++) {
       try {
-        await page.click(selector);
-        // Esperar el modal específico de esta plataforma
-        await page.waitForSelector('#ctl00_cphContenidoPrincipal_pnlDetalleActividad, .modal-content', { timeout: 5000 });
-        await new Promise(r => setTimeout(r, 600));
+        // Re-seleccionamos el elemento en cada iteración por si el DOM cambió
+        const eventSelector = `.fc-event:nth-of-type(${i + 1}), .fc-daygrid-event:nth-of-type(${i + 1}), .calendar-event:nth-of-type(${i + 1})`;
+        
+        await page.waitForSelector(eventSelector, { timeout: 10000 });
+        await page.click(eventSelector);
+        
+        // Esperar el modal específico
+        await page.waitForSelector('#ctl00_cphContenidoPrincipal_pnlDetalleActividad, [id*="DetalleActividad"], .modal-content', { timeout: 8000 });
+        await new Promise(r => setTimeout(r, 800)); // Esperar a que carguen los datos del modal
 
         const detail = await page.evaluate(() => {
-          // Intentar capturar el panel de detalle por su ID de ASP.NET
-          const modal = document.querySelector('[id*="pnlDetalleActividad"]') || document.querySelector('.modal-content');
+          const modal = document.querySelector('[id*="pnlDetalleActividad"]') || 
+                        document.querySelector('[id*="DetalleActividad"]') || 
+                        document.querySelector('.modal-content');
           if (!modal) return null;
 
           const fullText = modal.innerText || "";
           
-          // Asignatura (ubicada arriba del título)
+          // Asignatura
           let category = "General";
           const asignaturaEl = modal.querySelector('h5') || modal.querySelector('[class*="Asignatura"]');
           if (asignaturaEl) category = asignaturaEl.innerText.trim();
 
-          // Título (el texto más grande en el cuerpo del modal)
+          // Título
           let title = "Tarea sin título";
           const titleEl = modal.querySelector('h2, h3, .titulo');
           if (titleEl) title = titleEl.innerText.trim();
 
-          // Fecha de entrega (estilo: 08/03/2026 18:20 hrs.)
-          // Buscamos específicamente el patrón de fecha y hora
+          // Fecha de entrega
           const dateRegex = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/;
           const match = fullText.match(dateRegex);
           let dueDate = null;
@@ -95,29 +102,27 @@ async function scrapeAcademicManager(username, password) {
             dueDate = `${y}-${m}-${d} ${time}:00`;
           }
 
-          return { 
-            title, 
-            category, 
-            dueDate, 
-            description: `Importado de Academic Manager\n${fullText.substring(0, 300)}` 
-          };
+          return { title, category, dueDate, description: `Sincronizado de Academic Manager\n${fullText.substring(0, 300)}` };
         });
 
         if (detail) tasks.push(detail);
 
-        // Cerrar usando el ID de ASP.NET verificado
-        const closeBtn = await page.$('#ctl00_cphContenidoPrincipal_lnkCerrarDetalleActividad');
+        // Intentar cerrar el modal de varias formas para asegurar que el calendario sea visible de nuevo
+        const closeBtn = await page.$('[id*="lnkCerrarDetalleActividad"], .close, [class*="cerrar"]');
         if (closeBtn) {
           await closeBtn.click();
         } else {
           await page.keyboard.press('Escape');
         }
         
-        await new Promise(r => setTimeout(r, 400));
+        // Esperar a que el modal desaparezca y el calendario sea interactuable
+        await page.waitForFunction(() => !document.querySelector('[id*="pnlDetalleActividad"], .modal-backdrop'), { timeout: 5000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 600));
 
       } catch (err) {
-        console.warn(`Error en tarea con selector ${selector}:`, err.message);
+        console.warn(`Error en tarea índice ${i}:`, err.message);
         await page.keyboard.press('Escape').catch(() => {});
+        await new Promise(r => setTimeout(r, 1000));
       }
     }
 
