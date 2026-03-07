@@ -54,25 +54,24 @@ async function scrapeAcademicManager(username, password) {
     // 4. Extraer eventos del Calendario
     console.log('Detectando eventos en el calendario...');
     
-    // Obtenemos la cantidad de eventos primero
-    const eventCount = await page.evaluate(() => {
-      return document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event').length;
-    });
-
+    // Obtenemos los handles de todos los eventos visibles
+    const eventHandles = await page.$$('.fc-event, .fc-daygrid-event, .calendar-event');
     const tasks = [];
-    console.log(`Procesando ${eventCount} eventos detalladamente...`);
+    console.log(`Procesando ${eventHandles.length} eventos detalladamente...`);
 
-    for (let i = 0; i < eventCount; i++) {
+    for (let i = 0; i < eventHandles.length; i++) {
       try {
-        // Re-seleccionamos el elemento en cada iteración por si el DOM cambió
-        const eventSelector = `.fc-event:nth-of-type(${i + 1}), .fc-daygrid-event:nth-of-type(${i + 1}), .calendar-event:nth-of-type(${i + 1})`;
+        const handle = eventHandles[i];
         
-        await page.waitForSelector(eventSelector, { timeout: 10000 });
-        await page.click(eventSelector);
+        // Asegurarse de que sea visible y clickearlo via JS para evitar bloqueos
+        await page.evaluate((el) => {
+          el.scrollIntoView();
+          el.click(); // Click nativo de JS
+        }, handle);
         
         // Esperar el modal específico
-        await page.waitForSelector('#ctl00_cphContenidoPrincipal_pnlDetalleActividad, [id*="DetalleActividad"], .modal-content', { timeout: 8000 });
-        await new Promise(r => setTimeout(r, 800)); // Esperar a que carguen los datos del modal
+        await page.waitForSelector('[id*="pnlDetalleActividad"], [id*="DetalleActividad"], .modal-content', { timeout: 8000 });
+        await new Promise(r => setTimeout(r, 1000)); // Esperar carga de datos
 
         const detail = await page.evaluate(() => {
           const modal = document.querySelector('[id*="pnlDetalleActividad"]') || 
@@ -107,22 +106,19 @@ async function scrapeAcademicManager(username, password) {
 
         if (detail) tasks.push(detail);
 
-        // Intentar cerrar el modal de varias formas para asegurar que el calendario sea visible de nuevo
-        const closeBtn = await page.$('[id*="lnkCerrarDetalleActividad"], .close, [class*="cerrar"]');
-        if (closeBtn) {
-          await closeBtn.click();
-        } else {
-          await page.keyboard.press('Escape');
-        }
+        // Cerrar el modal
+        await page.evaluate(() => {
+          const closeBtn = document.querySelector('[id*="lnkCerrarDetalleActividad"], .close, [class*="cerrar"]');
+          if (closeBtn) closeBtn.click();
+          else window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        });
         
-        // Esperar a que el modal desaparezca y el calendario sea interactuable
-        await page.waitForFunction(() => !document.querySelector('[id*="pnlDetalleActividad"], .modal-backdrop'), { timeout: 5000 }).catch(() => {});
-        await new Promise(r => setTimeout(r, 600));
+        // Esperar a que limpie el DOM
+        await new Promise(r => setTimeout(r, 800));
 
       } catch (err) {
         console.warn(`Error en tarea índice ${i}:`, err.message);
         await page.keyboard.press('Escape').catch(() => {});
-        await new Promise(r => setTimeout(r, 1000));
       }
     }
 
