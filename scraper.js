@@ -19,23 +19,25 @@ async function scrapeAcademicManager(username, password) {
     
     // 1. Ir al Login
     console.log('Navegando a login...');
-    await page.goto('https://ueh.academic.lat/Autenticacion.aspx', { waitUntil: 'networkidle2' });
+    // Aumentar el timeout por defecto y usar domcontentloaded que es más rápido
+    await page.setDefaultNavigationTimeout(60000); 
+    await page.goto('https://ueh.academic.lat/Autenticacion.aspx', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     // 2. Llenar Credenciales (IDs verificados por el subagente)
     console.log('Ingresando credenciales...');
-    await page.waitForSelector('#txtUsuario');
+    await page.waitForSelector('#txtUsuario', { timeout: 30000 });
     await page.type('#txtUsuario', username);
     await page.type('#txtContrasenia', password);
     
     // El botón de entrar es un enlace que hace postback
     await Promise.all([
       page.click('#lnkEntrar'),
-      page.waitForNavigation({ waitUntil: 'networkidle2' })
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 })
     ]);
 
     // 3. Navegar a Actividades
     console.log('Navegando a actividades...');
-    await page.goto('https://ueh.academic.lat/Alumno/AlumnoActividadesClase.aspx', { waitUntil: 'networkidle2' });
+    await page.goto('https://ueh.academic.lat/Alumno/AlumnoActividadesClase.aspx', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     // 4. Extraer eventos del Calendario
     console.log('Detectando eventos en el calendario...');
