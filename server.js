@@ -207,10 +207,10 @@ app.get('/api/settings', async (req, res) => {
 app.post('/api/settings', async (req, res) => {
   try {
     const { botToken, chatId, academicUser, academicPass } = req.body;
-    if (botToken) await pool.query('REPLACE INTO settings (setting_key, setting_value) VALUES ("botToken", ?)', [botToken]);
-    if (chatId) await pool.query('REPLACE INTO settings (setting_key, setting_value) VALUES ("chatId", ?)', [chatId]);
-    if (academicUser) await pool.query('REPLACE INTO settings (setting_key, setting_value) VALUES ("academicUser", ?)', [academicUser]);
-    if (academicPass) await pool.query('REPLACE INTO settings (setting_key, setting_value) VALUES ("academicPass", ?)', [academicPass]);
+    if (botToken) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('botToken', ?)", [botToken]);
+    if (chatId) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('chatId', ?)", [chatId]);
+    if (academicUser) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicUser', ?)", [academicUser]);
+    if (academicPass) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicPass', ?)", [academicPass]);
     res.json({ message: 'Configuraciones actualizadas' });
   } catch (error) {
     console.error(error);
@@ -285,6 +285,12 @@ app.post('/api/sync-academic', async (req, res) => {
 
   try {
     console.log('Iniciando sincronización con Academic Manager...');
+    
+    // Auto-Guardar credenciales en la base de datos (settings) 
+    // para que el Cron Job de 12h las tenga disponibles automáticamente.
+    await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicUser', ?)", [academicUser]);
+    await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicPass', ?)", [academicPass]);
+
     const academicTasks = await scrapeAcademicManager(academicUser, academicPass);
     
     let addedCount = 0;

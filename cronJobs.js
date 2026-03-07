@@ -55,7 +55,7 @@ function initCronJobs(pool) {
               if (hours > 0) timeStr += `${hours}h `;
               if (mins > 0 || hours === 0) timeStr += `${mins}m`;
 
-              const telegramMessage = `🔔 *${isNow ? '¡Tiempo agotado!' : 'Tarea próxima'}*\nLa tarea "${task.title}" ${isNow ? 'debe entregarse ahora mismo.' : `vence en ${timeStr.trim()}.`}`;
+              const telegramMessage = `🔔 *${isNow ? '¡Tiempo agotado!' : 'Tarea próxima'}*\nLa tarea "${task.title}" (ID: ${task.id}) ${isNow ? 'debe entregarse ahora mismo.' : `vence en ${timeStr.trim()}.`}`;
 
               try {
                 await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
@@ -89,7 +89,7 @@ function initCronJobs(pool) {
     try {
       console.log('🔄 Iniciando Sincronización Automática Programada (12h)...');
       
-      const [settings] = await pool.query('SELECT setting_key, setting_value FROM settings WHERE setting_key IN ("academicUser", "academicPass")');
+      const [settings] = await pool.query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('academicUser', 'academicPass', 'botToken', 'chatId')");
       const config = {};
       settings.forEach(s => config[s.setting_key] = s.setting_value);
 
@@ -119,6 +119,18 @@ function initCronJobs(pool) {
       }
 
       console.log(`✅ Sincronización automática terminada. Nuevas: ${addedCount}`);
+      
+      // 3. Notificar éxito por Telegram
+      if (config.botToken && config.chatId) {
+        const syncMessage = `🎓 *Sincronización Académica Completada*\nSe revisó el portal y se añadieron *${addedCount}* tareas nuevas a tu lista.`;
+        try {
+          await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: config.chatId, text: syncMessage, parse_mode: 'Markdown' })
+          });
+        } catch (e) { console.error('Error enviando reporte de sync:', e.message); }
+      }
       
     } catch (error) {
       console.error('❌ Error en el Cron Job de Sincronización:', error);
