@@ -38,60 +38,76 @@ async function scrapeAcademicManager(username, password) {
     await page.goto('https://ueh.academic.lat/Alumno/AlumnoActividadesClase.aspx', { waitUntil: 'networkidle2' });
 
     // 4. Extraer eventos del Calendario
-    console.log('Extrayendo tareas y materias...');
-    const tasks = await page.evaluate(() => {
-      // a. Intentar capturar las materias/áreas de la barra lateral
-      const subjects = Array.from(document.querySelectorAll('.Asignaturas li, .sidebar a, .nav-item'))
-        .map(el => el.innerText.trim())
-        .filter(text => text.length > 3 && !text.includes('\n'));
-
-      // b. Capturar los bloques del calendario
-      const eventElements = document.querySelectorAll('.fc-event, .calendar-event, [class*="event"]');
-      const results = [];
-      
-      eventElements.forEach(el => {
-        const fullText = (el.innerText || el.textContent).trim();
-        
-        // Intentar deducir la fecha buscando en ancestros (FullCalendar usa data-date en varios niveles)
-        let dateStr = null;
-        let parent = el.parentElement;
-        while (parent && parent !== document.body) {
-          if (parent.getAttribute('data-date')) {
-            dateStr = parent.getAttribute('data-date');
-            break;
-          }
-          // Si no está en un atributo, tal vez esté en un ID o clase del contenedor
-          parent = parent.parentElement;
-        }
-
-        // Si aún no hay fecha, intentar buscar en el mismo nivel de la celda (FullCalendar v5+)
-        if (!dateStr) {
-          const cell = el.closest('td, .fc-daygrid-day');
-          if (cell) dateStr = cell.getAttribute('data-date');
-        }
-        
-        if (fullText && fullText.length > 5) {
-          // Intentar identificar la materia comparando con la lista lateral
-          let category = 'General';
-          for (const s of subjects) {
-            if (fullText.toLowerCase().includes(s.toLowerCase())) {
-              category = s;
-              break;
-            }
-          }
-
-          results.push({
-            title: fullText.split('\n')[0].trim(),
-            dueDate: dateStr,
-            category: category,
-            description: `Importado de Academic Manager\nTexto completo: ${fullText.replace(/\n/g, ' ')}`
-          });
-        }
-      });
-      return results;
+    console.log('Detectando eventos en el calendario...');
+    const eventSelectors = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('.fc-event, .calendar-event, [class*="event"]'))
+        .map((el, i) => {
+          // Asignar un ID temporal si no tiene para poder hacer click exacto
+          if (!el.id) el.id = `temp-event-${i}`;
+          return `#${el.id}`;
+        });
     });
 
-    console.log(`Scraping completado. Encontradas ${tasks.length} tareas.`);
+    const tasks = [];
+    console.log(`Procesando ${eventSelectors.length} eventos detalladamente...`);
+
+    // Procesamos solo los primeros 15 para no saturar el servidor/tiempo en esta fase de prueba
+    for (const selector of eventSelectors.slice(0, 15)) {
+      try {
+        await page.click(selector);
+        // Esperar a que el modal aparezca (suelen tener ids como 'modal', 'dialog' o clases descriptivas)
+        await page.waitForSelector('.modal-content, #DetalleActividad, .ui-dialog', { timeout: 5000 });
+        await new Promise(r => setTimeout(r, 500)); // Delay para animación
+
+        const detail = await page.evaluate(() => {
+          const modal = document.querySelector('.modal-content, #DetalleActividad, .ui-dialog');
+          if (!modal) return null;
+
+          // Según la captura del usuario:
+          // Izquierda arriba: Fecha publicación, Asignatura, Título (grande)
+          // Derecha: Fecha y hora de entrega exacta
+          
+          const fullText = modal.innerText || "";
+          const lines = fullText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+          
+          // Intentar capturar la asignatura (suele estar arriba del título)
+          let category = "General";
+          const asignaturaEl = modal.querySelector('.asignatura, [class*="Asignatura"], h5');
+          if (asignaturaEl) category = asignaturaEl.innerText.trim();
+
+          // Título grande
+          let title = lines[0]; 
+          const titleEl = modal.querySelector('h3, h2, .titulo');
+          if (titleEl) title = titleEl.innerText.trim();
+
+          // Fecha y hora de entrega (extrayendo del texto con Regex: DD/MM/YYYY HH:mm)
+          const dateRegex = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/;
+          const match = fullText.match(dateRegex);
+          let dueDate = null;
+          if (match) {
+            const [_, date, time] = match;
+            // Convertir DD/MM/YYYY a YYYY-MM-DD para la DB
+            const [d, m, y] = date.split('/');
+            dueDate = `${y}-${m}-${d} ${time}:00`;
+          }
+
+          return { title, category, dueDate, description: `Sincronizado de Academic Manager\n${fullText.substring(0, 200)}...` };
+        });
+
+        if (detail) tasks.push(detail);
+
+        // Cerrar el modal (Escape o botón de cierre)
+        await page.keyboard.press('Escape');
+        await new Promise(r => setTimeout(r, 300));
+
+      } catch (err) {
+        console.warn(`Error procesando evento ${selector}:`, err.message);
+        // Intentar cerrar si algo falló
+        await page.keyboard.press('Escape').catch(() => {});
+      }
+    }
+
+    console.log(`Scraping profundo completado. Encontradas ${tasks.length} tareas con detalle.`);
     return tasks;
 
   } catch (error) {
