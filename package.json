@@ -1,0 +1,25 @@
+{
+  "name": "tareapp-server",
+  "version": "1.0.0",
+  "description": "Backend API para TareApp - Gestor de tareas con notificaciones",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"No tests\" && exit 0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [],
+  "author": "Enrique Daniel",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "multer": "^2.1.1",
+    "mysql2": "^3.19.0",
+    "node-cron": "^4.2.1"
+  }
+}
