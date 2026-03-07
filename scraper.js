@@ -86,25 +86,38 @@ async function scrapeAcademicManager(username, password) {
           if (!modal) return null;
 
           const fullText = (modal.innerText || "").trim();
-          console.log("Contenido del modal:", fullText.substring(0, 100)); // Esto saldrá en consola del navegador (no en Render directo pero ayuda)
-
-          // Asignatura: Buscar en h5 o elementos con clase Asignatura
+          
+          // 1. Materia/Asignatura (Justo arriba del título)
+          // En la imagen se ve "IM Sistemas digitales"
           let category = "General";
           const asignaturaEl = modal.querySelector('h5, .asignatura, [class*="Asignatura"]');
-          if (asignaturaEl) category = asignaturaEl.innerText.trim();
-
-          // Título: Suele ser h2, h3 o un span grande
-          let title = "Tarea sin título";
-          const titleEl = modal.querySelector('h2, h3, .titulo, [style*="font-size: 20px"]');
-          if (titleEl) title = titleEl.innerText.trim();
-          
-          // Si el título es muy corto o nulo, intentar con la primera línea de texto significante
-          if (title === "Tarea sin título" || title.length < 3) {
-             const lines = fullText.split('\n').map(l => l.trim()).filter(l => l.length > 5);
-             if (lines.length > 0) title = lines[0];
+          if (asignaturaEl) {
+            category = asignaturaEl.innerText.trim();
           }
 
-          // Fecha de entrega: Buscar patrón DD/MM/YYYY HH:mm
+          // 2. Título (Abajo de la materia, letra grande)
+          // En la imagen: "control de relate con un foco arduino"
+          let title = "Tarea sin título";
+          const titleEl = modal.querySelector('h2, h3, .titulo, [style*="font-size: 20px"]');
+          if (titleEl && !titleEl.innerText.includes("Detalle de Actividad")) {
+            title = titleEl.innerText.trim();
+          } else {
+            // Si el título capturado es el genérico del modal, buscamos el siguiente elemento de texto grande
+            const candidate = modal.querySelector('div[style*="font-size"], .content h3, .content h2');
+            if (candidate) title = candidate.innerText.trim();
+          }
+          
+          // Si sigue siendo el genérico, intentamos por posición relativa
+          if (title.includes("Detalle de Actividad") || title === "Tarea sin título") {
+             const allTexts = Array.from(modal.querySelectorAll('div, span, p'))
+               .map(el => el.innerText.trim())
+               .filter(t => t.length > 10);
+             // El título suele ser el primer o segundo bloque de texto largo después de la materia
+             if (allTexts.length > 2) title = allTexts[2];
+          }
+
+          // 3. Fecha de entrega (En el panel derecho, abajo de Seguimiento)
+          // Patrón: DD/MM/YYYY HH:mm hrs.
           const dateRegex = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/;
           const match = fullText.match(dateRegex);
           let dueDate = null;
@@ -117,11 +130,11 @@ async function scrapeAcademicManager(username, password) {
           return { title, category, dueDate, description: `Sincronizado de Academic Manager\n${fullText.substring(0, 400)}` };
         });
 
-        if (detail && detail.title !== "Tarea sin título") {
-          console.log(`- Encontrada: ${detail.title} (${detail.dueDate})`);
+        if (detail && detail.dueDate) {
+          console.log(`- Encontrada: ${detail.title} | Materia: ${detail.category} | Fecha: ${detail.dueDate}`);
           tasks.push(detail);
         } else {
-          console.log(`- Aviso: Tarea ${i + 1} no pudo ser extraída correctamente.`);
+          console.log(`- Aviso: No se pudo extraer la fecha para la tarea ${i + 1}.`);
         }
 
         // Cerrar el modal mediante JS directo al botón de cierre
