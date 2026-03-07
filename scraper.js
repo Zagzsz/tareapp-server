@@ -89,49 +89,44 @@ async function scrapeAcademicManager(username, password) {
     for (let i = 0; i < eventCount; i++) {
         console.log(`Procesando ${i + 1}/${eventCount}...`);
         try {
-          // Re-localizar y clickear vía JS apuntando al contenido interno (según captura del usuario)
-          const clicked = await page.evaluate((idx) => {
+          // Obtener las coordenadas del centro del evento para un clic real de ratón
+          const rect = await page.evaluate((idx) => {
             const events = document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event');
             const ev = events[idx];
             if (ev) {
               ev.scrollIntoView({ block: 'center' });
-              // Intentar clickear el interior o el icono si existen
-              const inner = ev.querySelector('.fc-event-inner') || ev.querySelector('svg') || ev;
-              inner.click();
-              return true;
+              const r = ev.getBoundingClientRect();
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
-            return false;
+            return null;
           }, i);
-  
-          if (!clicked) {
-            console.warn(`  ⚠ No se pudo encontrar el evento ${i + 1} para clickear.`);
+
+          if (!rect) {
+            console.warn(`  ⚠ No se pudo obtener coordenadas para evento ${i + 1}`);
             continue;
           }
 
-          // Esperar modal (más flexible)
-          const modalVisible = await page.waitForSelector('[id*="pnlDetalleActividad"], .modal-content, .ui-dialog, [class*="modal"]', { 
+          // Clic de ratón real en las coordenadas (Simula humano)
+          await page.mouse.click(rect.x, rect.y);
+  
+          // Esperar modal (usando selectores compartidos por el subagent)
+          const modalVisible = await page.waitForSelector('.modal-content, .ui-dialog, [id*="pnlDetalleActividad"]', { 
             visible: true, 
             timeout: 10000 
           }).catch(async () => {
-             // ERROR: El modal no apareció. Tomamos captura para ver qué pasó.
-             try {
-               const path = `/tmp/error_evento_${i+1}.png`;
-               await page.screenshot({ path });
-               console.log(`  📸 Captura de error guardada en: ${path} (El modal no abrió al clickear)`);
-             } catch (e) {
-               console.log("  (No se pudo tomar la captura de error)");
-             }
+             const path = `/tmp/error_click_evento_${i+1}.png`;
+             await page.screenshot({ path });
+             console.log(`  📸 Error: Modal no abrió. Captura en: ${path}`);
              return null;
           });
   
-          if (!modalVisible) {
-            console.warn(`  ⚠ El modal de la tarea ${i + 1} no se detectó tras el clic.`);
-            continue;
-          }
+          if (!modalVisible) continue;
 
+          // Tiempo para que el AJAX cargue el contenido interno
+          await new Promise(r => setTimeout(r, 2500));
           await waitForAjaxIdle(page, 3000);
 
-          // ── EXTRACCIÓN (Pinpoint con info del usuario) ─────────────────────────
+          // ── EXTRACCIÓN (Pinpoint v9) ───────────────────────────────────────
           const detail = await page.evaluate(() => {
             const modal = document.querySelector('[id*="pnlDetalleActividad"]') || 
                           document.querySelector('.modal-content') || 
@@ -140,48 +135,45 @@ async function scrapeAcademicManager(username, password) {
 
             const fullText = (modal.innerText || "").trim().replace(/\s+/g, ' ');
             
-            // 1. Materia (Selector pinpoint: .hAsignatura)
+            // 1. Materia (.hAsignatura)
             let category = "General";
-            const asigEl = modal.querySelector('.hAsignatura') || modal.querySelector('[class*="Asignatura"]');
+            const asigEl = modal.querySelector('.hAsignatura') || modal.querySelector('h5');
             if (asigEl) category = asigEl.innerText.trim();
 
-            // 2. Título (Selector pinpoint: .hActividad)
+            // 2. Título (.hActividad o h2)
             let title = "Tarea sin título";
-            const actEl = modal.querySelector('.hActividad') || modal.querySelector('h2, h3');
-            if (actEl) {
-                title = actEl.innerText.replace(/"/g, '').trim(); // Limpiar comillas si existen
-            }
+            const actEl = modal.querySelector('.hActividad') || modal.querySelector('h2');
+            if (actEl) title = actEl.innerText.replace(/"/g, '').trim();
 
-            // 3. Descripción (Selector pinpoint: .descripActividad)
+            // 3. Descripción (.descripActividad)
             let description = "Sincronizado de Academic Manager";
-            const descEl = modal.querySelector('.descripActividad');
+            const descEl = modal.querySelector('.descripActividad') || modal.querySelector('p');
             if (descEl) description = descEl.innerText.trim();
 
-            // 4. Fecha de entrega (Selector pinpoint: div con icono de calendario)
+            // 4. Fecha de entrega (Regex sobre el texto del lado del icono)
             let dueDate = null;
-            // Buscamos específicamente el patrón de fecha en los elementos hermanos de los iconos
             const dateMatch = fullText.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
             if (dateMatch) {
               const [_, dStr, tStr] = dateMatch;
               const [d, m, y] = dStr.split('/');
-              dueDate = `${y}-${m}-${d} ${tStr}:00`;
+              dueDate = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')} ${tStr}:00`;
             }
 
             return { title, category, dueDate, description };
           });
 
           if (detail && detail.dueDate) {
-            console.log(`  ✓ Encontrada: ${detail.title} (${detail.dueDate})`);
+            console.log(`  ✓ OK: ${detail.title} - ${detail.dueDate}`);
             tasks.push(detail);
           } else {
-            console.log(`  ✗ Datos incompletos para tarea ${i + 1}`);
+            console.warn(`  ✗ Datos incompletos en tarea ${i + 1}`);
           }
 
       } catch (err) {
-        console.warn(`  Error evento ${i + 1}:`, err.message);
+        console.warn(`  Error en evento ${i + 1}:`, err.message);
       } finally {
         await cerrarModal(page);
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, 1000));
       }
     }
 
