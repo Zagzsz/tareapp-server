@@ -27,24 +27,24 @@ async function scrapeAcademicManager(username, password) {
 
     const page = await browser.newPage();
 
-    // Bloquear recursos innecesarios → menos RAM y más velocidad
+    // Bloquear recursos pesados pero PERMITIR CSS para que el calendario tenga dimensiones reales
     await page.setRequestInterception(true);
     page.on('request', (req) => {
       const type = req.resourceType();
-      if (['image', 'stylesheet', 'font', 'media', 'other'].includes(type)) {
+      if (['image', 'font', 'media'].includes(type)) { // Permitimos 'stylesheet'
         req.abort();
       } else {
         req.continue();
       }
     });
 
-    await page.setViewport({ width: 1024, height: 768 });
+    await page.setViewport({ width: 1280, height: 900 });
     await page.setDefaultNavigationTimeout(60000);
 
     // ── 1. LOGIN ────────────────────────────────────────────────────────────
     console.log('Navegando a login...');
     await page.goto('https://ueh.academic.lat/Autenticacion.aspx', {
-      waitUntil: 'domcontentloaded',
+      waitUntil: 'networkidle2',
       timeout: 60000
     });
 
@@ -52,6 +52,7 @@ async function scrapeAcademicManager(username, password) {
     await page.type('#txtUsuario', username);
     await page.type('#txtContrasenia', password);
 
+    console.log('Haciendo clic en Entrar...');
     await Promise.all([
       page.click('#lnkEntrar'),
       page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 60000 })
@@ -65,54 +66,49 @@ async function scrapeAcademicManager(username, password) {
     // ── 2. CALENDARIO ───────────────────────────────────────────────────────
     console.log('Navegando a actividades...');
     await page.goto('https://ueh.academic.lat/Alumno/AlumnoActividadesClase.aspx', {
-      waitUntil: 'networkidle0',
+      waitUntil: 'networkidle2',
       timeout: 60000
     });
 
+    console.log('Esperando eventos...');
     await page.waitForSelector('.fc-event, .fc-daygrid-event, .calendar-event', {
       timeout: 30000
-    });
-    await new Promise(r => setTimeout(r, 2000));
+    }).catch(() => console.log("Aviso: No se vieron eventos de inmediato."));
+    
+    await new Promise(r => setTimeout(r, 3000)); // Esperar a que el calendario se asiente
 
     // ── 3. CONTAR EVENTOS ───────────────────────────────────────────────────
     const eventCount = await page.evaluate(() =>
       document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event').length
     );
 
-    console.log(`Encontrados ${eventCount} eventos`);
+    console.log(`Detectados ${eventCount} eventos`);
     const tasks = [];
 
     // ── 4. ITERAR ───────────────────────────────────────────────────────────
     for (let i = 0; i < eventCount; i++) {
-      console.log(`Procesando ${i + 1}/${eventCount}...`);
-      try {
-
-        await page.evaluate((idx) => {
-          const events = document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event');
-          if (events[idx]) {
-            events[idx].scrollIntoView({ block: 'center' });
-            events[idx].click();
+        console.log(`Procesando ${i + 1}/${eventCount}...`);
+        try {
+          // Re-localizar y clickear vía JS para máxima precisión
+          await page.evaluate((idx) => {
+            const events = document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event');
+            if (events[idx]) {
+              events[idx].scrollIntoView({ block: 'center' });
+              events[idx].click();
+            }
+          }, i);
+  
+          // Esperar modal (usando selectores conocidos y el texto dinámico)
+          const modalVisible = await page.waitForSelector('[id*="pnlDetalleActividad"], .modal-content, .ui-dialog', { 
+            visible: true, 
+            timeout: 10000 
+          }).catch(() => null);
+  
+          if (!modalVisible) {
+            console.warn(`  ⚠ Modal no apareció para evento ${i + 1}`);
+            // PLAN B: Tomar captura de error (opcional pero útil en Render logs)
+            continue;
           }
-        }, i);
-
-        // Esperar modal visible por contenido
-        const modalVisible = await page.waitForFunction(() => {
-          const all = document.querySelectorAll('*');
-          for (const el of all) {
-            if (
-              el.offsetParent !== null &&
-              el.children.length > 0 &&
-              el.innerText?.includes('Detalle de Actividad')
-            ) return true;
-          }
-          return false;
-        }, { timeout: 10000 }).catch(() => null);
-
-        if (!modalVisible) {
-          console.warn(`  ⚠ Modal no apareció (evento ${i + 1})`);
-          await cerrarModal(page);
-          continue;
-        }
 
         await waitForAjaxIdle(page, 2500);
 
