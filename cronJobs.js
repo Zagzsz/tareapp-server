@@ -17,28 +17,27 @@ function initCronJobs(pool) {
 
   console.log('⏰ Cron Job iniciado: Verificando tareas cada 15 segundos...');
   
-  // Se ejecuta cada 15 segundos ('*/15 * * * * *')
+  // =========================================================================
+  // 1. Cron Job: Verificación de Vencimientos (Cada 15 segundos)
+  // =========================================================================
   cron.schedule('*/15 * * * * *', async () => {
     try {
       const now = Date.now();
       
-      // 1. Obtener todas las tareas pendientes con fecha
       const [tasks] = await pool.query('SELECT id, title, dueDate FROM tasks WHERE completed = 0 AND dueDate IS NOT NULL');
       if (tasks.length === 0) return;
 
-      // 2. Obtener Token y Chat de Telegram desde BD
       const [settings] = await pool.query('SELECT setting_key, setting_value FROM settings');
       const config = {};
       settings.forEach(s => config[s.setting_key] = s.setting_value);
       
-      if (!config.botToken || !config.chatId) return; // Si no hay Telegram configurado, no hace nada
+      if (!config.botToken || !config.chatId) return;
 
-      // 3. Evaluar Vencimientos
       for (const task of tasks) {
         const dueTime = new Date(task.dueDate).getTime();
         const timeRemaining = dueTime - now;
 
-        if (timeRemaining < -60000) continue; // Pasó hace mucho, ignorar
+        if (timeRemaining < -60000) continue;
 
         for (let threshold of DYNAMIC_THRESHOLDS) {
           if (timeRemaining <= threshold && timeRemaining > threshold - 30000) {
@@ -58,9 +57,7 @@ function initCronJobs(pool) {
 
               const telegramMessage = `🔔 *${isNow ? '¡Tiempo agotado!' : 'Tarea próxima'}*\nLa tarea "${task.title}" ${isNow ? 'debe entregarse ahora mismo.' : `vence en ${timeStr.trim()}.`}`;
 
-              // 4. Enviar a Telegram Servidor-A-Telegram directamente
               try {
-                // Node 18+ soporta fetch nativo
                 await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -70,9 +67,9 @@ function initCronJobs(pool) {
                     parse_mode: 'Markdown'
                   })
                 });
-                console.log(`[Push Enviado a Telegram]: Tarea ID ${task.id} (${timeRemaining}ms restantes)`);
+                console.log(`[Push Enviado a Telegram]: Tarea ID ${task.id}`);
               } catch (e) {
-                console.error('Error contactando Telegram desde NodeJS:', e.message);
+                console.error('Error contactando Telegram:', e.message);
               }
             }
             break; 
@@ -80,7 +77,51 @@ function initCronJobs(pool) {
         }
       }
     } catch (error) {
-      console.error('Error en el Cron Job:', error);
+      console.error('Error en el Cron Job de Alertas:', error);
+    }
+  });
+
+  // =========================================================================
+  // 2. Cron Job: Sincronización Automática de Academic Manager (Cada 12 horas)
+  // =========================================================================
+  // Se ejecuta a las 00:00 y 12:00 todos los días ('0 0,12 * * *')
+  cron.schedule('0 0,12 * * *', async () => {
+    try {
+      console.log('🔄 Iniciando Sincronización Automática Programada (12h)...');
+      
+      const [settings] = await pool.query('SELECT setting_key, setting_value FROM settings WHERE setting_key IN ("academicUser", "academicPass")');
+      const config = {};
+      settings.forEach(s => config[s.setting_key] = s.setting_value);
+
+      if (!config.academicUser || !config.academicPass) {
+        console.warn('  ⚠ No hay credenciales de Academic Manager guardadas. Sincronización abortada.');
+        return;
+      }
+
+      const { scrapeAcademicManager } = require('./scraper');
+      const academicTasks = await scrapeAcademicManager(config.academicUser, config.academicPass);
+      
+      let addedCount = 0;
+      for (const task of academicTasks) {
+        const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
+        
+        if (existing.length === 0) {
+          if (task.category && task.category !== 'General') {
+            await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
+          }
+
+          await pool.query(
+            "INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)",
+            [task.title, task.description, task.dueDate, task.category || 'General']
+          );
+          addedCount++;
+        }
+      }
+
+      console.log(`✅ Sincronización automática terminada. Nuevas: ${addedCount}`);
+      
+    } catch (error) {
+      console.error('❌ Error en el Cron Job de Sincronización:', error);
     }
   });
 }

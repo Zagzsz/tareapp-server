@@ -206,9 +206,11 @@ app.get('/api/settings', async (req, res) => {
 
 app.post('/api/settings', async (req, res) => {
   try {
-    const { botToken, chatId } = req.body;
-    await pool.query('REPLACE INTO settings (setting_key, setting_value) VALUES ("botToken", ?)', [botToken]);
-    await pool.query('REPLACE INTO settings (setting_key, setting_value) VALUES ("chatId", ?)', [chatId]);
+    const { botToken, chatId, academicUser, academicPass } = req.body;
+    if (botToken) await pool.query('REPLACE INTO settings (setting_key, setting_value) VALUES ("botToken", ?)', [botToken]);
+    if (chatId) await pool.query('REPLACE INTO settings (setting_key, setting_value) VALUES ("chatId", ?)', [chatId]);
+    if (academicUser) await pool.query('REPLACE INTO settings (setting_key, setting_value) VALUES ("academicUser", ?)', [academicUser]);
+    if (academicPass) await pool.query('REPLACE INTO settings (setting_key, setting_value) VALUES ("academicPass", ?)', [academicPass]);
     res.json({ message: 'Configuraciones actualizadas' });
   } catch (error) {
     console.error(error);
