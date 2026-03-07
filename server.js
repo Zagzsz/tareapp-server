@@ -291,9 +291,14 @@ app.post('/api/sync-academic', async (req, res) => {
       const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
       
       if (existing.length === 0) {
+        // Asegurar que la categoría exista en la tabla categories
+        if (task.category && task.category !== 'General') {
+          await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
+        }
+
         await pool.query(
-          "INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, 'General')",
-          [task.title, task.description, task.dueDate]
+          "INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)",
+          [task.title, task.description, task.dueDate, task.category || 'General']
         );
         addedCount++;
       }

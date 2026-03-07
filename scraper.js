@@ -38,24 +38,53 @@ async function scrapeAcademicManager(username, password) {
     await page.goto('https://ueh.academic.lat/Alumno/AlumnoActividadesClase.aspx', { waitUntil: 'networkidle2' });
 
     // 4. Extraer eventos del Calendario
-    // El calendario parece ser un FullCalendar o similar.
-    // Buscamos elementos que parezcan eventos de calendario.
+    console.log('Extrayendo tareas y materias...');
     const tasks = await page.evaluate(() => {
-      // Intentamos capturar los bloques del calendario
+      // a. Intentar capturar las materias/áreas de la barra lateral
+      const subjects = Array.from(document.querySelectorAll('.Asignaturas li, .sidebar a, .nav-item'))
+        .map(el => el.innerText.trim())
+        .filter(text => text.length > 3 && !text.includes('\n'));
+
+      // b. Capturar los bloques del calendario
       const eventElements = document.querySelectorAll('.fc-event, .calendar-event, [class*="event"]');
       const results = [];
       
       eventElements.forEach(el => {
-        const title = el.innerText || el.textContent;
-        // Intentamos deducir la fecha del contenedor padre (celda del calendario)
-        const cell = el.closest('td');
-        const dateStr = cell ? cell.getAttribute('data-date') : null;
+        const fullText = (el.innerText || el.textContent).trim();
         
-        if (title && title.length > 5) {
+        // Intentar deducir la fecha buscando en ancestros (FullCalendar usa data-date en varios niveles)
+        let dateStr = null;
+        let parent = el.parentElement;
+        while (parent && parent !== document.body) {
+          if (parent.getAttribute('data-date')) {
+            dateStr = parent.getAttribute('data-date');
+            break;
+          }
+          // Si no está en un atributo, tal vez esté en un ID o clase del contenedor
+          parent = parent.parentElement;
+        }
+
+        // Si aún no hay fecha, intentar buscar en el mismo nivel de la celda (FullCalendar v5+)
+        if (!dateStr) {
+          const cell = el.closest('td, .fc-daygrid-day');
+          if (cell) dateStr = cell.getAttribute('data-date');
+        }
+        
+        if (fullText && fullText.length > 5) {
+          // Intentar identificar la materia comparando con la lista lateral
+          let category = 'General';
+          for (const s of subjects) {
+            if (fullText.toLowerCase().includes(s.toLowerCase())) {
+              category = s;
+              break;
+            }
+          }
+
           results.push({
-            title: title.split('\n')[0].trim(), // Limpiar ruidos
+            title: fullText.split('\n')[0].trim(),
             dueDate: dateStr,
-            description: 'Importado de Academic Manager'
+            category: category,
+            description: `Importado de Academic Manager\nTexto completo: ${fullText.replace(/\n/g, ' ')}`
           });
         }
       });
