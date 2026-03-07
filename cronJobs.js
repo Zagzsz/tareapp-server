@@ -12,10 +12,7 @@ function initCronJobs(pool) {
   };
   const DYNAMIC_THRESHOLDS = generateThresholds();
 
-  // Guarda qué notificaciones (ID de tarea + umbral) ya se enviaron
-  const notifiedTasks = new Set();
-
-  console.log('⏰ Cron Job iniciado: Verificando tareas cada 15 segundos...');
+  console.log('⏰ Cron Jobs Activos: Alertas (15s) y Sync Academic (12h).');
   
   // =========================================================================
   // 1. Cron Job: Verificación de Vencimientos (Cada 15 segundos)
@@ -27,7 +24,7 @@ function initCronJobs(pool) {
       const [tasks] = await pool.query('SELECT id, title, dueDate FROM tasks WHERE completed = 0 AND dueDate IS NOT NULL');
       if (tasks.length === 0) return;
 
-      const [settings] = await pool.query('SELECT setting_key, setting_value FROM settings');
+      const [settings] = await pool.query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('botToken', 'chatId')");
       const config = {};
       settings.forEach(s => config[s.setting_key] = s.setting_value);
       
@@ -41,11 +38,14 @@ function initCronJobs(pool) {
 
         for (let threshold of DYNAMIC_THRESHOLDS) {
           if (timeRemaining <= threshold && timeRemaining > threshold - 30000) {
-            const notificationId = `${task.id}-${threshold}`;
             
-            if (!notifiedTasks.has(notificationId)) {
-              notifiedTasks.add(notificationId);
-              
+            // VERIFICACIÓN DE PERSISTENCIA (v22): ¿Ya se envió esta alerta?
+            const [alreadySent] = await pool.query(
+                'SELECT id FROM sent_notifications WHERE task_id = ? AND threshold = ?',
+                [task.id, threshold]
+            );
+
+            if (alreadySent.length === 0) {
               const isNow = threshold === 0;
               const minutesTotal = Math.round(threshold / 60000);
               const hours = Math.floor(minutesTotal / 60);
@@ -58,19 +58,21 @@ function initCronJobs(pool) {
               const telegramMessage = `🔔 *${isNow ? '¡Tiempo agotado!' : 'Tarea próxima'}*\nLa tarea "${task.title}" (ID: ${task.id}) ${isNow ? 'debe entregarse ahora mismo.' : `vence en ${timeStr.trim()}.`}`;
 
               try {
-                // Usando fetch nativo (Node 18+)
                 await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    chat_id: config.chatId,
-                    text: telegramMessage,
-                    parse_mode: 'Markdown'
-                  })
+                  body: JSON.stringify({ chat_id: config.chatId, text: telegramMessage, parse_mode: 'Markdown' })
                 });
-                console.log(`[Push Enviado a Telegram]: Tarea ID ${task.id}`);
+
+                // REGISTRAR ENVÍO (v22)
+                await pool.query(
+                    'INSERT IGNORE INTO sent_notifications (task_id, threshold) VALUES (?, ?)',
+                    [task.id, threshold]
+                );
+                console.log(`[Persistente]: Alerta Tarea ${task.id} (Umbral ${threshold}ms) guardada en BD.`);
+
               } catch (e) {
-                console.error('Error contactando Telegram:', e.message);
+                console.error('Error enviando a Telegram:', e.message);
               }
             }
             break; 
@@ -78,14 +80,13 @@ function initCronJobs(pool) {
         }
       }
     } catch (error) {
-      console.error('Error en el Cron Job de Alertas:', error);
+      console.error('Error en Cron Alertas:', error);
     }
   });
 
   // =========================================================================
   // 2. Cron Job: Sincronización Automática de Academic Manager (Cada 12 horas)
   // =========================================================================
-  // Se ejecuta a las 00:00 y 12:00 todos los días
   cron.schedule('0 0,12 * * *', async () => {
     try {
       console.log('🔄 Iniciando Sincronización Automática Programada (12h)...');
@@ -94,10 +95,7 @@ function initCronJobs(pool) {
       const config = {};
       settings.forEach(s => config[s.setting_key] = s.setting_value);
 
-      if (!config.academicUser || !config.academicPass) {
-        console.warn('  ⚠ No hay credenciales de Academic Manager guardadas. Sincronización abortada.');
-        return;
-      }
+      if (!config.academicUser || !config.academicPass) return;
 
       const { scrapeAcademicManager } = require('./scraper');
       const academicTasks = await scrapeAcademicManager(config.academicUser, config.academicPass);
@@ -105,36 +103,25 @@ function initCronJobs(pool) {
       let addedCount = 0;
       for (const task of academicTasks) {
         const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
-        
         if (existing.length === 0) {
-          if (task.category && task.category !== 'General') {
-            await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
-          }
-
-          await pool.query(
-            "INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)",
-            [task.title, task.description, task.dueDate, task.category || 'General']
-          );
+          if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
+          await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, task.dueDate, task.category || 'General']);
           addedCount++;
         }
       }
 
       console.log(`✅ Sincronización automática terminada. Nuevas: ${addedCount}`);
       
-      // Notificar éxito por Telegram
       if (config.botToken && config.chatId) {
-        const syncMessage = `🎓 *Sincronización Académica Completada*\nSe revisó el portal y se añadieron *${addedCount}* tareas nuevas a tu lista.`;
-        try {
-          await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: config.chatId, text: syncMessage, parse_mode: 'Markdown' })
-          });
-        } catch (e) { console.error('Error enviando reporte de sync:', e.message); }
+        const syncMessage = `🎓 *Sincronización Automática Finalizada*\nSe revisó tu portal y se añadieron *${addedCount}* tareas nuevas.`;
+        await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: config.chatId, text: syncMessage, parse_mode: 'Markdown' })
+        });
       }
-      
     } catch (error) {
-      console.error('❌ Error en el Cron Job de Sincronización:', error);
+      console.error('Error en Cron Sync:', error);
     }
   });
 }

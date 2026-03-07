@@ -54,9 +54,124 @@ if (process.env.DB_SSL === 'true') {
 
 const pool = mysql.createPool(poolConfig);
 
-// ==========================================
-// ENDPOINTS API REST
-// ==========================================
+// Inicialización de Tablas (Persistencia)
+const initDb = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sent_notifications (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        task_id INT,
+        threshold BIGINT,
+        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY task_thresh (task_id, threshold)
+      )
+    `);
+    console.log('✅ Tabla sent_notifications lista.');
+  } catch (err) {
+    console.error('Error inicializando DB:', err);
+  }
+};
+initDb();
+
+// --- SISTEMA DE COMANDOS TELEGRAM (LONG POLLING) ---
+let lastUpdateId = 0;
+const startTelegramPolling = async () => {
+    // Solo iniciar si hay configuración
+    const [settings] = await pool.query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('botToken', 'chatId', 'academicUser', 'academicPass')");
+    const config = {};
+    settings.forEach(s => config[s.setting_key] = s.setting_value);
+
+    if (!config.botToken || !config.chatId) {
+        setTimeout(startTelegramPolling, 30000); // Reintentar en 30s
+        return;
+    }
+
+    try {
+        const response = await fetch(`https://api.telegram.org/bot${config.botToken}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`);
+        const data = await response.json();
+
+        if (data.ok && data.result.length > 0) {
+            for (const update of data.result) {
+                lastUpdateId = update.update_id;
+                if (!update.message || !update.message.text) continue;
+
+                const text = update.message.text.toLowerCase();
+                const chatId = update.message.chat.id.toString();
+
+                // Seguridad: Solo responder al dueño (chatId configurado)
+                if (chatId !== config.chatId) continue;
+
+                if (text === '/start' || text === '/help') {
+                    const welcome = "👋 *¡Hola! Soy tu asistente de TareApp*\n\nComandos disponibles:\n/tareas - Ver lista de pendientes\n/sync - Sincronizar Academic ahora\n/completar [ID] - Marcar tarea como lista";
+                    await sendTelegram(config.botToken, chatId, welcome);
+                } 
+                else if (text === '/tareas') {
+                    const [tasks] = await pool.query('SELECT id, title, category FROM tasks WHERE completed = 0 ORDER BY dueDate ASC');
+                    if (tasks.length === 0) {
+                        await sendTelegram(config.botToken, chatId, "✅ No tienes tareas pendientes.");
+                    } else {
+                        const list = tasks.map(t => `• *${t.title}* (ID: ${t.id}) [${t.category || 'General'}]`).join('\n');
+                        await sendTelegram(config.botToken, chatId, `📋 *Tareas Pendientes:*\n\n${list}`);
+                    }
+                }
+                else if (text === '/sync') {
+                    await sendTelegram(config.botToken, chatId, "⏳ Iniciando sincronización... te avisaré al terminar.");
+                    if (!config.academicUser || !config.academicPass) {
+                        await sendTelegram(config.botToken, chatId, "❌ No tienes credenciales guardadas. Hazlo en la app primero.");
+                    } else {
+                        try {
+                            const academicTasks = await scrapeAcademicManager(config.academicUser, config.academicPass);
+                            let added = 0;
+                            for (const task of academicTasks) {
+                                const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
+                                if (existing.length === 0) {
+                                    if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
+                                    await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, task.dueDate, task.category || 'General']);
+                                    added++;
+                                }
+                            }
+                            await sendTelegram(config.botToken, chatId, `✅ Sync lista. Halladas: ${academicTasks.length}, Nuevas: ${added}`);
+                        } catch (e) {
+                            await sendTelegram(config.botToken, chatId, `❌ Error en sync: ${e.message}`);
+                        }
+                    }
+                }
+                else if (text.startsWith('/completar ')) {
+                    const taskId = text.split(' ')[1];
+                    if (!taskId || isNaN(taskId)) {
+                        await sendTelegram(config.botToken, chatId, "❌ Formato: `/completar [ID]`");
+                    } else {
+                        const [res] = await pool.query('UPDATE tasks SET completed = 1 WHERE id = ?', [taskId]);
+                        if (res.affectedRows > 0) {
+                            await sendTelegram(config.botToken, chatId, `✅ Tarea ID ${taskId} marcada como completada.`);
+                        } else {
+                            await sendTelegram(config.botToken, chatId, `❌ No encontré la tarea con ID ${taskId}.`);
+                        }
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Error Polling Telegram:', err.message);
+    }
+    
+    setTimeout(startTelegramPolling, 1000); // Siguiente ciclo
+};
+
+async function sendTelegram(token, chatId, text) {
+    try {
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' })
+        });
+    } catch (e) { console.error('Error en sendTelegram:', e.message); }
+}
+
+// Iniciar Polling al arrancar
+startTelegramPolling();
+
+// --- ENDPOINTS API REST ---
 
 // --- HEALTH CHECK (Para cron-job.org y Render) ---
 app.get('/health', (req, res) => {
