@@ -255,7 +255,7 @@ app.get('/api/check-notifications', async (req, res) => {
           if (hours > 0) timeStr += `${hours}h `;
           if (mins > 0 || hours === 0) timeStr += `${mins}m`;
 
-          const text = `🔔 *${isNow ? '¡Tiempo agotado!' : 'Tarea próxima'}*\nLa tarea "${task.title}" ${isNow ? 'debe entregarse ahora mismo.' : `vence en ${timeStr.trim()}.`}`;
+          const text = `🔔 *${isNow ? '¡Tiempo agotado!' : 'Tarea próxima'}*\nLa tarea "${task.title}" (ID: ${task.id}) ${isNow ? 'debe entregarse ahora mismo.' : `vence en ${timeStr.trim()}.`}`;
           try {
             await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
               method: 'POST',
@@ -268,7 +268,22 @@ app.get('/api/check-notifications', async (req, res) => {
         }
       }
     }
-    res.json({ checked: tasks.length, sent, message: `Se revisaron ${tasks.length} tareas, se enviaron ${sent} alertas.` });
+
+    // --- NUEVO: Reporte de Tareas Pendientes (Para el Botón de Prueba) ---
+    if (config.botToken && config.chatId && tasks.length > 0) {
+      const pendingList = tasks.map(t => `• *${t.title}* (ID: ${t.id})${t.category ? ` [${t.category}]` : ''}`).join('\n');
+      const testMessage = `📋 *Reporte de Tareas Pendientes*\nTotal: ${tasks.length} tareas\n\n${pendingList}`;
+      
+      try {
+        await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: config.chatId, text: testMessage, parse_mode: 'Markdown' })
+        });
+      } catch (e) { console.error('Error enviando reporte de prueba:', e.message); }
+    }
+
+    res.json({ checked: tasks.length, sent, message: `Se revisaron ${tasks.length} tareas, se enviaron ${sent} alertas y el reporte completo.` });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error verificando notificaciones' });
