@@ -232,6 +232,8 @@ app.get('/api/check-notifications', async (req, res) => {
     const thresholds = [0];
     for (let m = 15; m <= 240; m += 15) thresholds.push(m * 60 * 1000);
     for (let m = 270; m <= 480; m += 30) thresholds.push(m * 60 * 1000);
+    for (let h = 12; h <= 24; h += 12) thresholds.push(h * 60 * 60 * 1000);
+    for (let d = 2; d <= 7; d++) thresholds.push(d * 24 * 60 * 60 * 1000);
     thresholds.sort((a, b) => b - a);
 
     let sent = 0;
