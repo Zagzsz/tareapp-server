@@ -54,24 +54,30 @@ async function scrapeAcademicManager(username, password) {
     // 4. Extraer eventos del Calendario
     console.log('Detectando eventos en el calendario...');
     
-    // Obtenemos los handles de todos los eventos visibles
-    const eventHandles = await page.$$('.fc-event, .fc-daygrid-event, .calendar-event');
-    const tasks = [];
-    console.log(`Procesando ${eventHandles.length} eventos detalladamente...`);
+    // Obtenemos la cantidad de eventos primero
+    const eventCount = await page.evaluate(() => {
+      return document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event').length;
+    });
 
-    for (let i = 0; i < eventHandles.length; i++) {
+    const tasks = [];
+    console.log(`Procesando ${eventCount} eventos detalladamente...`);
+
+    for (let i = 0; i < eventCount; i++) {
       try {
-        const handle = eventHandles[i];
+        console.log(`Procesando tarea ${i + 1}/${eventCount}...`);
         
-        // Asegurarse de que sea visible y clickearlo via JS para evitar bloqueos
-        await page.evaluate((el) => {
-          el.scrollIntoView();
-          el.click(); // Click nativo de JS
-        }, handle);
+        // RE-BUSCAR el elemento por índice en cada iteración para evitar "Protocol Error"
+        await page.evaluate((idx) => {
+          const events = document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event');
+          if (events[idx]) {
+            events[idx].scrollIntoView();
+            events[idx].click();
+          }
+        }, i);
         
         // Esperar el modal específico
-        await page.waitForSelector('[id*="pnlDetalleActividad"], [id*="DetalleActividad"], .modal-content', { timeout: 8000 });
-        await new Promise(r => setTimeout(r, 1000)); // Esperar carga de datos
+        await page.waitForSelector('[id*="pnlDetalleActividad"], [id*="DetalleActividad"], .modal-content', { timeout: 10000 });
+        await new Promise(r => setTimeout(r, 1200)); // Un poco más de tiempo para carga de datos AJAX
 
         const detail = await page.evaluate(() => {
           const modal = document.querySelector('[id*="pnlDetalleActividad"]') || 
@@ -79,19 +85,26 @@ async function scrapeAcademicManager(username, password) {
                         document.querySelector('.modal-content');
           if (!modal) return null;
 
-          const fullText = modal.innerText || "";
-          
-          // Asignatura
+          const fullText = (modal.innerText || "").trim();
+          console.log("Contenido del modal:", fullText.substring(0, 100)); // Esto saldrá en consola del navegador (no en Render directo pero ayuda)
+
+          // Asignatura: Buscar en h5 o elementos con clase Asignatura
           let category = "General";
-          const asignaturaEl = modal.querySelector('h5') || modal.querySelector('[class*="Asignatura"]');
+          const asignaturaEl = modal.querySelector('h5, .asignatura, [class*="Asignatura"]');
           if (asignaturaEl) category = asignaturaEl.innerText.trim();
 
-          // Título
+          // Título: Suele ser h2, h3 o un span grande
           let title = "Tarea sin título";
-          const titleEl = modal.querySelector('h2, h3, .titulo');
+          const titleEl = modal.querySelector('h2, h3, .titulo, [style*="font-size: 20px"]');
           if (titleEl) title = titleEl.innerText.trim();
+          
+          // Si el título es muy corto o nulo, intentar con la primera línea de texto significante
+          if (title === "Tarea sin título" || title.length < 3) {
+             const lines = fullText.split('\n').map(l => l.trim()).filter(l => l.length > 5);
+             if (lines.length > 0) title = lines[0];
+          }
 
-          // Fecha de entrega
+          // Fecha de entrega: Buscar patrón DD/MM/YYYY HH:mm
           const dateRegex = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/;
           const match = fullText.match(dateRegex);
           let dueDate = null;
@@ -101,28 +114,41 @@ async function scrapeAcademicManager(username, password) {
             dueDate = `${y}-${m}-${d} ${time}:00`;
           }
 
-          return { title, category, dueDate, description: `Sincronizado de Academic Manager\n${fullText.substring(0, 300)}` };
+          return { title, category, dueDate, description: `Sincronizado de Academic Manager\n${fullText.substring(0, 400)}` };
         });
 
-        if (detail) tasks.push(detail);
+        if (detail && detail.title !== "Tarea sin título") {
+          console.log(`- Encontrada: ${detail.title} (${detail.dueDate})`);
+          tasks.push(detail);
+        } else {
+          console.log(`- Aviso: Tarea ${i + 1} no pudo ser extraída correctamente.`);
+        }
 
-        // Cerrar el modal
+        // Cerrar el modal mediante JS directo al botón de cierre
         await page.evaluate(() => {
-          const closeBtn = document.querySelector('[id*="lnkCerrarDetalleActividad"], .close, [class*="cerrar"]');
+          const closeBtn = document.querySelector('[id*="lnkCerrarDetalleActividad"]') || 
+                           document.querySelector('.close') || 
+                           document.querySelector('[id*="lnkCerrar"]');
           if (closeBtn) closeBtn.click();
           else window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
         });
         
-        // Esperar a que limpie el DOM
-        await new Promise(r => setTimeout(r, 800));
+        // Esperar a que el modal desaparezca totalmente
+        await page.waitForFunction(() => {
+          const modal = document.querySelector('[id*="pnlDetalleActividad"], .modal-backdrop, .modal-content');
+          return !modal || modal.offsetParent === null;
+        }, { timeout: 5000 }).catch(() => {});
+        
+        await new Promise(r => setTimeout(r, 1000));
 
       } catch (err) {
         console.warn(`Error en tarea índice ${i}:`, err.message);
         await page.keyboard.press('Escape').catch(() => {});
+        await new Promise(r => setTimeout(r, 1500));
       }
     }
 
-    console.log(`Sincronización terminada. ${tasks.length} tareas procesadas con éxito.`);
+    console.log(`Sincronización terminada. ${tasks.length} tareas válidas procesadas.`);
     return tasks;
 
   } catch (error) {
