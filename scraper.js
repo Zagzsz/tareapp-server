@@ -89,12 +89,15 @@ async function scrapeAcademicManager(username, password) {
     for (let i = 0; i < eventCount; i++) {
         console.log(`Procesando ${i + 1}/${eventCount}...`);
         try {
-          // Obtener las coordenadas del centro del evento para un clic real de ratón
+          // ASEGURARNOS DE QUE NO HAY MODALES PREVIOS BLOQUEANDO (Cruce de seguridad)
+          await cerrarModal(page);
+
+          // Obtener las coordenadas del centro del evento
           const rect = await page.evaluate((idx) => {
             const events = document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event');
             const ev = events[idx];
             if (ev) {
-              ev.scrollIntoView({ block: 'center' });
+              ev.scrollIntoView({ block: 'center', behavior: 'instant' });
               const r = ev.getBoundingClientRect();
               return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
@@ -106,27 +109,27 @@ async function scrapeAcademicManager(username, password) {
             continue;
           }
 
-          // Clic de ratón real en las coordenadas (Simula humano)
+          // Clic real de ratón (Simula humano)
           await page.mouse.click(rect.x, rect.y);
   
-          // Esperar modal (usando selectores compartidos por el subagent)
+          // Esperar a que el modal aparezca
           const modalVisible = await page.waitForSelector('.modal-content, .ui-dialog, [id*="pnlDetalleActividad"]', { 
             visible: true, 
-            timeout: 10000 
+            timeout: 12000 
           }).catch(async () => {
              const path = `/tmp/error_click_evento_${i+1}.png`;
              await page.screenshot({ path });
-             console.log(`  📸 Error: Modal no abrió. Captura en: ${path}`);
+             console.log(`  📸 Error: El modal no abrió. Foto en: ${path}`);
              return null;
           });
   
           if (!modalVisible) continue;
 
-          // Tiempo para que el AJAX cargue el contenido interno
-          await new Promise(r => setTimeout(r, 2500));
-          await waitForAjaxIdle(page, 3000);
+          // Espera a que el contenido AJAX se cargue realmente en el modal
+          await new Promise(r => setTimeout(r, 3000));
+          await waitForAjaxIdle(page, 4000);
 
-          // ── EXTRACCIÓN (Pinpoint v9) ───────────────────────────────────────
+          // ── EXTRACCIÓN (Pinpoint v10) ─────────────────────────────────────
           const detail = await page.evaluate(() => {
             const modal = document.querySelector('[id*="pnlDetalleActividad"]') || 
                           document.querySelector('.modal-content') || 
@@ -135,22 +138,22 @@ async function scrapeAcademicManager(username, password) {
 
             const fullText = (modal.innerText || "").trim().replace(/\s+/g, ' ');
             
-            // 1. Materia (.hAsignatura)
+            // 1. Materia
             let category = "General";
             const asigEl = modal.querySelector('.hAsignatura') || modal.querySelector('h5');
             if (asigEl) category = asigEl.innerText.trim();
 
-            // 2. Título (.hActividad o h2)
+            // 2. Título
             let title = "Tarea sin título";
             const actEl = modal.querySelector('.hActividad') || modal.querySelector('h2');
             if (actEl) title = actEl.innerText.replace(/"/g, '').trim();
 
-            // 3. Descripción (.descripActividad)
+            // 3. Descripción
             let description = "Sincronizado de Academic Manager";
             const descEl = modal.querySelector('.descripActividad') || modal.querySelector('p');
             if (descEl) description = descEl.innerText.trim();
 
-            // 4. Fecha de entrega (Regex sobre el texto del lado del icono)
+            // 4. Fecha de entrega (Regex sobre el texto del modal)
             let dueDate = null;
             const dateMatch = fullText.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
             if (dateMatch) {
@@ -166,18 +169,19 @@ async function scrapeAcademicManager(username, password) {
             console.log(`  ✓ OK: ${detail.title} - ${detail.dueDate}`);
             tasks.push(detail);
           } else {
-            console.warn(`  ✗ Datos incompletos en tarea ${i + 1}`);
+            console.warn(`  ✗ Datos incompletos en tarea ${i + 1}. No se agregará.`);
           }
 
       } catch (err) {
         console.warn(`  Error en evento ${i + 1}:`, err.message);
       } finally {
+        // Cierre AGRESIVO del modal para la siguiente iteración
         await cerrarModal(page);
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 1500));
       }
     }
 
-    console.log(`\n✅ ${tasks.length}/${eventCount} tareas válidas`);
+    console.log(`\n✅ ${tasks.length}/${eventCount} tareas válidas extraídas`);
     return tasks;
 
   } catch (error) {
@@ -205,27 +209,36 @@ async function waitForAjaxIdle(page, fallbackMs = 2500) {
 
 async function cerrarModal(page) {
   await page.evaluate(() => {
-    for (const sel of [
-      '[id*="lnkCerrar"]',
-      '[id*="btnCerrar"]',
-      '.modal-header .close',
-      '.ui-dialog-titlebar-close',
-      'button.close',
-      '.close'
-    ]) {
+    // 1. Intentar clic en botones de cerrar conocidos
+    const closeSelectors = [
+      '[id*="lnkCerrar"]', '[id*="btnCerrar"]', '.modal-header .close',
+      '.ui-dialog-titlebar-close', 'button.close', '.close', '.ui-icon-closethick'
+    ];
+    closeSelectors.forEach(sel => {
       const btn = document.querySelector(sel);
-      if (btn && btn.offsetParent !== null) { btn.click(); return; }
-    }
+      if (btn && btn.offsetParent !== null) btn.click();
+    });
+
+    // 2. Forzar cierre con Escape
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+    // 3. AGRESIVO: Eliminar cualquier modal o backdrop que bloquee el calendario
+    const blockers = document.querySelectorAll('.modal, .modal-backdrop, .ui-dialog, .ui-widget-overlay, [id*="pnlDetalleActividad"]');
+    blockers.forEach(el => {
+        if (el) {
+            el.style.display = 'none';
+            el.style.pointerEvents = 'none';
+            el.classList.remove('show', 'in');
+        }
+    });
+    
+    // Limpiar clases del body que bloquean el scroll
+    document.body.classList.remove('modal-open');
+    document.body.style.overflow = 'auto';
   });
 
-  await page.waitForFunction(() => {
-    const all = document.querySelectorAll('div');
-    for (const el of all) {
-      if (el.offsetParent !== null && el.innerText?.includes('Detalle de Actividad')) return false;
-    }
-    return true;
-  }, { timeout: 4000 }).catch(() => { });
+  // Esperar un momento a que el DOM se asiente
+  await new Promise(r => setTimeout(r, 1000));
 }
 
 module.exports = { scrapeAcademicManager };
