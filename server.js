@@ -292,7 +292,7 @@ app.post('/api/sync-academic', async (req, res) => {
       
       if (existing.length === 0) {
         await pool.query(
-          'INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, "General")',
+          "INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, 'General')",
           [task.title, task.description, task.dueDate]
         );
         addedCount++;
