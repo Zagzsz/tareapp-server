@@ -75,7 +75,7 @@ async function scrapeAcademicManager(username, password) {
       timeout: 30000
     }).catch(() => console.log("Aviso: No se vieron eventos de inmediato."));
     
-    await new Promise(r => setTimeout(r, 3000)); // Esperar a que el calendario se asiente
+    await new Promise(r => setTimeout(r, 4000)); // Esperar a que el calendario se asiente COMPLETAMENTE
 
     // ── 3. CONTAR EVENTOS ───────────────────────────────────────────────────
     const eventCount = await page.evaluate(() =>
@@ -89,91 +89,91 @@ async function scrapeAcademicManager(username, password) {
     for (let i = 0; i < eventCount; i++) {
         console.log(`Procesando ${i + 1}/${eventCount}...`);
         try {
-          // Re-localizar y clickear vía JS para máxima precisión
-          await page.evaluate((idx) => {
+          // Re-localizar y clickear vía JS apuntando al contenido interno (según captura del usuario)
+          const clicked = await page.evaluate((idx) => {
             const events = document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event');
-            if (events[idx]) {
-              events[idx].scrollIntoView({ block: 'center' });
-              events[idx].click();
+            const ev = events[idx];
+            if (ev) {
+              ev.scrollIntoView({ block: 'center' });
+              // Intentar clickear el interior o el icono si existen
+              const inner = ev.querySelector('.fc-event-inner') || ev.querySelector('svg') || ev;
+              inner.click();
+              return true;
             }
+            return false;
           }, i);
   
-          // Esperar modal (usando selectores conocidos y el texto dinámico)
-          const modalVisible = await page.waitForSelector('[id*="pnlDetalleActividad"], .modal-content, .ui-dialog', { 
-            visible: true, 
-            timeout: 10000 
-          }).catch(() => null);
-  
-          if (!modalVisible) {
-            console.warn(`  ⚠ Modal no apareció para evento ${i + 1}`);
-            // PLAN B: Tomar captura de error (opcional pero útil en Render logs)
+          if (!clicked) {
+            console.warn(`  ⚠ No se pudo encontrar el evento ${i + 1} para clickear.`);
             continue;
           }
 
-        await waitForAjaxIdle(page, 2500);
-
-        // ── EXTRACCIÓN ──────────────────────────────────────────────────────
-        const detail = await page.evaluate(() => {
-          // Encontrar el contenedor del modal visible más específico
-          let modal = null;
-          const all = document.querySelectorAll('div, section, article');
-          for (const el of all) {
-            if (el.offsetParent !== null && el.innerText?.includes('Detalle de Actividad')) {
-              if (!modal || el.querySelectorAll('*').length < modal.querySelectorAll('*').length) {
-                modal = el;
-              }
-            }
-          }
-          if (!modal) return null;
-
-          const fullText = modal.innerText.trim().replace(/\s+/g, ' ');
-
-          // — Asignatura desde el header: "Detalle de Actividad - IM Control analógico"
-          let category = 'General';
-          const headerEl = modal.querySelector(
-            '.modal-header, [class*="header"], .ui-dialog-titlebar, h5, .h-Title-S'
-          );
-          if (headerEl) {
-            const headerText = headerEl.innerText.trim();
-            const dashIdx = headerText.indexOf(' - ');
-            if (dashIdx !== -1) category = headerText.substring(dashIdx + 3).trim();
-          }
-
-          // — Título: primer heading que no sea el genérico del header
-          let title = 'Tarea sin título';
-          for (const h of modal.querySelectorAll('h1, h2, h3, h4')) {
-            const t = h.innerText.trim();
-            if (t.length > 3 && !t.toLowerCase().includes('detalle de actividad')) {
-              title = t;
-              break;
-            }
-          }
-
-          // — Fecha de entrega: DD/MM/YYYY HH:mm → YYYY-MM-DD HH:mm:ss (formato MySQL DATETIME)
-          let dueDate = null;
-          const dateMatches = [...fullText.matchAll(/(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}:\d{2})/g)];
-
-          if (dateMatches.length > 0) {
-            const last = dateMatches[dateMatches.length - 1];
-            const [d, m, y] = last[1].split('/');
-            const timePart = last[2]; // "15:00"
-            dueDate = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')} ${timePart}:00`;
-          }
-
-          return { title, category, dueDate, debugSnippet: fullText.substring(0, 400) };
-        });
-
-        if (detail?.dueDate) {
-          console.log(`  ✓ "${detail.title}" | ${detail.category} | ${detail.dueDate}`);
-          tasks.push({
-            title: detail.title,
-            category: detail.category,
-            dueDate: detail.dueDate,
-            description: 'Sincronizado de Academic Manager'
+          // Esperar modal (más flexible)
+          const modalVisible = await page.waitForSelector('[id*="pnlDetalleActividad"], .modal-content, .ui-dialog, [class*="modal"]', { 
+            visible: true, 
+            timeout: 10000 
+          }).catch(async () => {
+             // ERROR: El modal no apareció. Tomamos captura para ver qué pasó.
+             try {
+               const path = `/tmp/error_evento_${i+1}.png`;
+               await page.screenshot({ path });
+               console.log(`  📸 Captura de error guardada en: ${path} (El modal no abrió al clickear)`);
+             } catch (e) {
+               console.log("  (No se pudo tomar la captura de error)");
+             }
+             return null;
           });
-        } else {
-          console.warn(`  ✗ Sin fecha. Snippet: "${detail?.debugSnippet ?? 'N/A'}"`);
-        }
+  
+          if (!modalVisible) {
+            console.warn(`  ⚠ El modal de la tarea ${i + 1} no se detectó tras el clic.`);
+            continue;
+          }
+
+          await waitForAjaxIdle(page, 3000);
+
+          // ── EXTRACCIÓN (Resiliente) ─────────────────────────────────────────
+          const detail = await page.evaluate(() => {
+            const modal = document.querySelector('[id*="pnlDetalleActividad"]') || 
+                          document.querySelector('.modal-content') || 
+                          document.querySelector('.ui-dialog');
+            if (!modal) return null;
+
+            const fullText = (modal.innerText || "").trim().replace(/\s+/g, ' ');
+            
+            // Materia
+            let category = "General";
+            const header = modal.querySelector('.modal-header, .h-Title-S, h5');
+            if (header && header.innerText.includes(' - ')) {
+                category = header.innerText.split(' - ')[1].trim();
+            } else if (modal.querySelector('.h-Title-S')) {
+                category = modal.querySelector('.h-Title-S').innerText.trim();
+            }
+
+            // Título
+            let title = "Tarea sin título";
+            const tEl = modal.querySelector('.h-Title') || modal.querySelector('h3, h2');
+            if (tEl && !tEl.innerText.toLowerCase().includes('detalle de')) {
+                title = tEl.innerText.trim();
+            }
+
+            // Fecha
+            let dueDate = null;
+            const match = fullText.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
+            if (match) {
+              const [_, dStr, tStr] = match;
+              const [d, m, y] = dStr.split('/');
+              dueDate = `${y}-${m}-${d} ${tStr}:00`;
+            }
+
+            return { title, category, dueDate };
+          });
+
+          if (detail && detail.dueDate) {
+            console.log(`  ✓ Encontrada: ${detail.title} (${detail.dueDate})`);
+            tasks.push(detail);
+          } else {
+            console.log(`  ✗ Datos incompletos para tarea ${i + 1}`);
+          }
 
       } catch (err) {
         console.warn(`  Error evento ${i + 1}:`, err.message);
