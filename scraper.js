@@ -131,7 +131,7 @@ async function scrapeAcademicManager(username, password) {
 
           await waitForAjaxIdle(page, 3000);
 
-          // ── EXTRACCIÓN (Resiliente) ─────────────────────────────────────────
+          // ── EXTRACCIÓN (Pinpoint con info del usuario) ─────────────────────────
           const detail = await page.evaluate(() => {
             const modal = document.querySelector('[id*="pnlDetalleActividad"]') || 
                           document.querySelector('.modal-content') || 
@@ -140,32 +140,34 @@ async function scrapeAcademicManager(username, password) {
 
             const fullText = (modal.innerText || "").trim().replace(/\s+/g, ' ');
             
-            // Materia
+            // 1. Materia (Selector pinpoint: .hAsignatura)
             let category = "General";
-            const header = modal.querySelector('.modal-header, .h-Title-S, h5');
-            if (header && header.innerText.includes(' - ')) {
-                category = header.innerText.split(' - ')[1].trim();
-            } else if (modal.querySelector('.h-Title-S')) {
-                category = modal.querySelector('.h-Title-S').innerText.trim();
-            }
+            const asigEl = modal.querySelector('.hAsignatura') || modal.querySelector('[class*="Asignatura"]');
+            if (asigEl) category = asigEl.innerText.trim();
 
-            // Título
+            // 2. Título (Selector pinpoint: .hActividad)
             let title = "Tarea sin título";
-            const tEl = modal.querySelector('.h-Title') || modal.querySelector('h3, h2');
-            if (tEl && !tEl.innerText.toLowerCase().includes('detalle de')) {
-                title = tEl.innerText.trim();
+            const actEl = modal.querySelector('.hActividad') || modal.querySelector('h2, h3');
+            if (actEl) {
+                title = actEl.innerText.replace(/"/g, '').trim(); // Limpiar comillas si existen
             }
 
-            // Fecha
+            // 3. Descripción (Selector pinpoint: .descripActividad)
+            let description = "Sincronizado de Academic Manager";
+            const descEl = modal.querySelector('.descripActividad');
+            if (descEl) description = descEl.innerText.trim();
+
+            // 4. Fecha de entrega (Selector pinpoint: div con icono de calendario)
             let dueDate = null;
-            const match = fullText.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
-            if (match) {
-              const [_, dStr, tStr] = match;
+            // Buscamos específicamente el patrón de fecha en los elementos hermanos de los iconos
+            const dateMatch = fullText.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
+            if (dateMatch) {
+              const [_, dStr, tStr] = dateMatch;
               const [d, m, y] = dStr.split('/');
               dueDate = `${y}-${m}-${d} ${tStr}:00`;
             }
 
-            return { title, category, dueDate };
+            return { title, category, dueDate, description };
           });
 
           if (detail && detail.dueDate) {
