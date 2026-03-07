@@ -58,6 +58,7 @@ function initCronJobs(pool) {
               const telegramMessage = `🔔 *${isNow ? '¡Tiempo agotado!' : 'Tarea próxima'}*\nLa tarea "${task.title}" (ID: ${task.id}) ${isNow ? 'debe entregarse ahora mismo.' : `vence en ${timeStr.trim()}.`}`;
 
               try {
+                // Usando fetch nativo (Node 18+)
                 await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -84,7 +85,7 @@ function initCronJobs(pool) {
   // =========================================================================
   // 2. Cron Job: Sincronización Automática de Academic Manager (Cada 12 horas)
   // =========================================================================
-  // Se ejecuta a las 00:00 y 12:00 todos los días ('0 0,12 * * *')
+  // Se ejecuta a las 00:00 y 12:00 todos los días
   cron.schedule('0 0,12 * * *', async () => {
     try {
       console.log('🔄 Iniciando Sincronización Automática Programada (12h)...');
@@ -120,7 +121,7 @@ function initCronJobs(pool) {
 
       console.log(`✅ Sincronización automática terminada. Nuevas: ${addedCount}`);
       
-      // 3. Notificar éxito por Telegram
+      // Notificar éxito por Telegram
       if (config.botToken && config.chatId) {
         const syncMessage = `🎓 *Sincronización Académica Completada*\nSe revisó el portal y se añadieron *${addedCount}* tareas nuevas a tu lista.`;
         try {
