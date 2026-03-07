@@ -38,9 +38,16 @@ async function scrapeAcademicManager(username, password) {
     // 3. Navegar a Actividades
     console.log('Navegando a actividades...');
     await page.goto('https://ueh.academic.lat/Alumno/AlumnoActividadesClase.aspx', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    
+    // Esperar explícitamente a que el calendario cargue
+    console.log('Esperando el calendario...');
+    await page.waitForSelector('.fc-view-container, #calendar, .fc-event', { timeout: 30000 }).catch(e => console.log("Aviso: El calendario tardó demasiado o no se encontró."));
 
     // 4. Extraer eventos del Calendario
     console.log('Detectando eventos en el calendario...');
+    const pageTitle = await page.title();
+    console.log(`Título de la página actual: ${pageTitle}`);
+    
     const eventSelectors = await page.evaluate(() => {
       // Los eventos suelen tener clases fc-event o similares en FullCalendar
       return Array.from(document.querySelectorAll('.fc-event, .calendar-event'))
