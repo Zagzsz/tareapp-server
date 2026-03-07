@@ -87,44 +87,52 @@ async function scrapeAcademicManager(username, password) {
 
           const fullText = (modal.innerText || "").trim();
           
-          // 1. Materia/Asignatura (Justo arriba del título)
-          // En la imagen se ve "IM Sistemas digitales"
+          // 1. Materia/Asignatura (Selector pinpoint: .h-Title-S)
           let category = "General";
-          const asignaturaEl = modal.querySelector('h5, .asignatura, [class*="Asignatura"]');
+          const asignaturaEl = modal.querySelector('.h-Title-S') || 
+                               modal.querySelector('h5') || 
+                               modal.querySelector('[class*="Asignatura"]');
           if (asignaturaEl) {
             category = asignaturaEl.innerText.trim();
           }
 
-          // 2. Título (Abajo de la materia, letra grande)
-          // En la imagen: "control de relate con un foco arduino"
+          // 2. Título (Selector pinpoint: .h-Title)
           let title = "Tarea sin título";
-          const titleEl = modal.querySelector('h2, h3, .titulo, [style*="font-size: 20px"]');
+          const titleEl = modal.querySelector('.h-Title') || 
+                          modal.querySelector('h2, h3, .titulo');
           if (titleEl && !titleEl.innerText.includes("Detalle de Actividad")) {
             title = titleEl.innerText.trim();
-          } else {
-            // Si el título capturado es el genérico del modal, buscamos el siguiente elemento de texto grande
-            const candidate = modal.querySelector('div[style*="font-size"], .content h3, .content h2');
-            if (candidate) title = candidate.innerText.trim();
           }
           
-          // Si sigue siendo el genérico, intentamos por posición relativa
+          // Si el título sigue siendo genérico o vacío, buscar en h3 dentro del contenido
           if (title.includes("Detalle de Actividad") || title === "Tarea sin título") {
-             const allTexts = Array.from(modal.querySelectorAll('div, span, p'))
-               .map(el => el.innerText.trim())
-               .filter(t => t.length > 10);
-             // El título suele ser el primer o segundo bloque de texto largo después de la materia
-             if (allTexts.length > 2) title = allTexts[2];
+             const candidate = modal.querySelector('.modal-body h3, .modal-body h4, .h-Title');
+             if (candidate) title = candidate.innerText.trim();
           }
 
-          // 3. Fecha de entrega (En el panel derecho, abajo de Seguimiento)
-          // Patrón: DD/MM/YYYY HH:mm hrs.
-          const dateRegex = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/;
-          const match = fullText.match(dateRegex);
+          // 3. Fecha de entrega (Selector pinpoint: [id*="lblFechaEntrega"] o similar en panel derecho)
+          const dateEl = modal.querySelector('[id*="lblFechaEntrega"]') || 
+                         modal.querySelector('[id*="lblFechaFin"]') ||
+                         modal.querySelector('.dv-right-section div:nth-child(2) > div:nth-child(2)');
+          
           let dueDate = null;
-          if (match) {
-            const [_, date, time] = match;
-            const [d, m, y] = date.split('/');
-            dueDate = `${y}-${m}-${d} ${time}:00`;
+          let dateStr = dateEl ? dateEl.innerText.trim() : "";
+          
+          // Fallback al regex si el selector directo falla o el texto es vacío
+          if (!dateStr || !dateStr.includes("/")) {
+            const match = fullText.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
+            if (match) {
+              const [_, date, time] = match;
+              const [d, m, y] = date.split('/');
+              dueDate = `${y}-${m}-${d} ${time}:00`;
+            }
+          } else {
+            const match = dateStr.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/);
+            if (match) {
+              const [_, date, time] = match;
+              const [d, m, y] = date.split('/');
+              dueDate = `${y}-${m}-${d} ${time}:00`;
+            }
           }
 
           return { title, category, dueDate, description: `Sincronizado de Academic Manager\n${fullText.substring(0, 400)}` };
