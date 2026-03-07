@@ -1,4 +1,5 @@
 require('dotenv').config();
+console.log('--- SERVER BOOTSTRAP STARTING ---');
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
