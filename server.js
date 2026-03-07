@@ -5,6 +5,7 @@ const mysql = require('mysql2/promise');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { scrapeAcademicManager } = require('./scraper');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -269,6 +270,47 @@ app.get('/api/check-notifications', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error verificando notificaciones' });
+  }
+});
+
+// --- ENDPOINT: Sincronizar con Academic Manager ---
+app.post('/api/sync-academic', async (req, res) => {
+  const { academicUser, academicPass } = req.body;
+
+  if (!academicUser || !academicPass) {
+    return res.status(400).json({ error: 'Faltan credenciales de Academic' });
+  }
+
+  try {
+    console.log('Iniciando sincronización con Academic Manager...');
+    const academicTasks = await scrapeAcademicManager(academicUser, academicPass);
+    
+    let addedCount = 0;
+    for (const task of academicTasks) {
+      // Verificar si ya existe una tarea con el mismo título para evitar duplicados
+      const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
+      
+      if (existing.length === 0) {
+        await pool.query(
+          'INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, "General")',
+          [task.title, task.description, task.dueDate]
+        );
+        addedCount++;
+      }
+    }
+
+    res.json({ 
+      message: 'Sincronización completada', 
+      found: academicTasks.length,
+      added: addedCount 
+    });
+
+  } catch (error) {
+    console.error('Error en sincronización:', error);
+    res.status(500).json({ 
+      error: 'Error al conectar con la plataforma universitaria',
+      details: error.message 
+    });
   }
 });
 
