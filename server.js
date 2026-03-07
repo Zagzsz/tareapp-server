@@ -125,8 +125,11 @@ const startTelegramPolling = async () => {
                             for (const task of academicTasks) {
                                 const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
                                 if (existing.length === 0) {
+                                    // Normalizar fecha para MySQL (YYYY-MM-DD HH:MM:SS)
+                                    const mysqlDate = new Date(task.dueDate).toISOString().slice(0, 19).replace('T', ' ');
+                                    
                                     if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
-                                    await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, task.dueDate, task.category || 'General']);
+                                    await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
                                     added++;
                                 }
                             }
@@ -429,18 +432,21 @@ app.post('/api/sync-academic', async (req, res) => {
       // Verificar si ya existe una tarea con el mismo título para evitar duplicados
       const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
       
-      if (existing.length === 0) {
-        // Asegurar que la categoría exista en la tabla categories
-        if (task.category && task.category !== 'General') {
-          await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
-        }
+        if (existing.length === 0) {
+          // Normalizar fecha para MySQL (YYYY-MM-DD HH:MM:SS)
+          const mysqlDate = new Date(task.dueDate).toISOString().slice(0, 19).replace('T', ' ');
 
-        await pool.query(
-          "INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)",
-          [task.title, task.description, task.dueDate, task.category || 'General']
-        );
-        addedCount++;
-      }
+          // Asegurar que la categoría exista en la tabla categories
+          if (task.category && task.category !== 'General') {
+            await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
+          }
+
+          await pool.query(
+            "INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)",
+            [task.title, task.description, mysqlDate, task.category || 'General']
+          );
+          addedCount++;
+        }
     }
 
     res.json({ 
@@ -461,7 +467,7 @@ app.post('/api/sync-academic', async (req, res) => {
 // Inicio del Servidor
 app.listen(PORT, () => {
   console.log('================================================================');
-  console.log(`🚀 TAREAPP SERVER v19 - ONLINE EN PUERTO ${PORT}`);
+  console.log(`🚀 TAREAPP SERVER v23 - ONLINE EN PUERTO ${PORT}`);
   console.log(`📅 FECHA: ${new Date().toLocaleString()}`);
   console.log(`🔗 API: ${PORT === 3001 ? 'http://localhost:3001' : 'Producción'}`);
   console.log('================================================================');

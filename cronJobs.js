@@ -104,8 +104,11 @@ function initCronJobs(pool) {
       for (const task of academicTasks) {
         const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
         if (existing.length === 0) {
+          // Normalizar fecha para MySQL (YYYY-MM-DD HH:MM:SS)
+          const mysqlDate = new Date(task.dueDate).toISOString().slice(0, 19).replace('T', ' ');
+
           if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
-          await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, task.dueDate, task.category || 'General']);
+          await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
           addedCount++;
         }
       }
