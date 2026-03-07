@@ -344,8 +344,12 @@ app.post('/api/sync-academic', async (req, res) => {
 
 // Inicio del Servidor
 app.listen(PORT, () => {
-  console.log(`🚀 Integración Cloud Server corriendo en el puerto ${PORT}`);
+  console.log('================================================================');
+  console.log(`🚀 TAREAPP SERVER v19 - ONLINE EN PUERTO ${PORT}`);
+  console.log(`📅 FECHA: ${new Date().toLocaleString()}`);
+  console.log(`🔗 API: ${PORT === 3001 ? 'http://localhost:3001' : 'Producción'}`);
+  console.log('================================================================');
   
-  // Inicializamos el Cron Job interno tambien (para cuando corre localmente)
+  // Inicializamos el Cron Job interno
   require('./cronJobs')(pool);
 });
