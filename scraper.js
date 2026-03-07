@@ -107,7 +107,7 @@ async function scrapeAcademicManager(username, password) {
           await new Promise(r => setTimeout(r, 2500));
           await waitForAjaxIdle(page, 4000);
 
-          // Extraer datos (Pinpoint v13)
+          // Extraer datos (Pinpoint v14)
           const detail = await page.evaluate(() => {
             const modal = document.querySelector('[id*="pnlDetalleActividad"]') || 
                           document.querySelector('.modal-content') || 
@@ -140,8 +140,16 @@ async function scrapeAcademicManager(username, password) {
           });
 
           if (detail && detail.dueDate) {
-            console.log(`  ✓ OK: ${detail.title} - ${detail.dueDate}`);
-            tasks.push(detail);
+            // ── FILTRO DE EXPIRACIÓN (v14) ──────────────────────────────────
+            const now = new Date();
+            const taskDate = new Date(detail.dueDate.replace(/-/g, '/')); // Compatibilidad de formato
+            
+            if (taskDate < now) {
+              console.log(`  ⌛ Ignorada (Expirada): ${detail.title} - ${detail.dueDate}`);
+            } else {
+              console.log(`  ✓ OK: ${detail.title} - ${detail.dueDate}`);
+              tasks.push(detail);
+            }
           }
 
       } catch (err) {
