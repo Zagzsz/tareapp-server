@@ -4,7 +4,7 @@
   "description": "Backend API para TareApp - Gestor de tareas con notificaciones",
   "main": "server.js",
   "scripts": {
-    "dev": "concurrently \"vite --host\" \"node server.js\"",
+    "dev": "vite --host",
     "start": "node server.js",
     "build": "vite build",
     "lint": "eslint .",
