@@ -3,29 +3,18 @@ import { API_URL } from '../config';
 
 // Generador de umbrales dinámicos (en milisegundos)
 const generateThresholds = () => {
-  const thresholds = [0]; // Momento exacto
-  
-  // De 15 min hasta 4 horas (240 min) -> cada 15 min
-  for (let m = 15; m <= 240; m += 15) {
-    thresholds.push(m * 60 * 1000);
-  }
-  
-  // De 4.5 horas (270 min) hasta 8 horas (480 min) -> cada 30 min
-  for (let m = 270; m <= 480; m += 30) {
-    thresholds.push(m * 60 * 1000);
-  }
-
-  // De 12 horas hasta 24 horas -> cada 12 horas
-  for (let h = 12; h <= 24; h += 12) {
-    thresholds.push(h * 60 * 60 * 1000);
-  }
-
-  // De 2 días hasta 7 días -> cada 24 horas
-  for (let d = 2; d <= 7; d++) {
-    thresholds.push(d * 24 * 60 * 60 * 1000);
-  }
-  
-  return thresholds.sort((a, b) => b - a); // Ordenar de mayor a menor
+  return [
+    0,                          // Al momento
+    15 * 60 * 1000,             // 15m
+    30 * 60 * 1000,             // 30m
+    60 * 60 * 1000,             // 1h
+    3 * 60 * 60 * 1000,         // 3h
+    6 * 60 * 60 * 1000,         // 6h
+    12 * 60 * 60 * 1000,        // 12h
+    24 * 60 * 60 * 1000,        // 24h (1 día)
+    3 * 24 * 60 * 60 * 1000,    // 3 días
+    7 * 24 * 60 * 60 * 1000     // 7 días
+  ].sort((a, b) => b - a);
 };
 
 const DYNAMIC_THRESHOLDS = generateThresholds();
@@ -71,22 +60,41 @@ export function useNotifications(tasks) {
 
   // Función para probar notificaciones manualmente sin depender del timer
   const testNotification = async () => {
-    // Probar Telegram Si existe config
+    // Probar Telegram / Discord Si existe config
     try {
       const savedConfig = localStorage.getItem('app_tareas_telegram_config');
       if (savedConfig) {
-        const { botToken, chatId } = JSON.parse(savedConfig);
+        const { botToken, chatId, discordWebhookUrl, discordRoleId } = JSON.parse(savedConfig);
+        
+        // 1. Probar Telegram
         if (botToken && chatId) {
-          // Llamar al servidor para que el Botón de Prueba mande el reporte REAL
-          fetch(`${API_URL}/check-notifications`, {
+          fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ botToken, chatId })
-          }).catch(err => console.error('Error llamando al reporte del servidor:', err));
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: "🧪 *Prueba de Notificación Telegram*\nSi ves esto, tu bot está bien configurado.",
+              parse_mode: 'Markdown'
+            })
+          }).catch(err => console.error('Error probando Telegram:', err));
+        }
+
+        // 2. Probar Discord
+        if (discordWebhookUrl) {
+          const content = "🧪 **Prueba de Notificación Discord**\nSi ves esto, tu webhook está bien configurado.";
+          const body = { content };
+          if (discordRoleId) {
+            body.content = `<@&${discordRoleId}> ${content}`;
+          }
+          fetch(discordWebhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          }).catch(err => console.error('Error probando Discord:', err));
         }
       }
     } catch (e) {
-      console.error('Error probando Telegram:', e);
+      console.error('Error probando notificaciones externas:', e);
     }
 
     if (permission === 'granted') {
@@ -110,11 +118,13 @@ export function useNotifications(tasks) {
   };
 
   const sendNotification = async (title, options = {}) => {
-    // 1. Enviar Notificación a Telegram (Si está configurado)
+    // 1. Enviar Notificación a Telegram / Discord (Si están configurados)
     try {
       const savedConfig = localStorage.getItem('app_tareas_telegram_config');
       if (savedConfig) {
-        const { botToken, chatId } = JSON.parse(savedConfig);
+        const { botToken, chatId, discordWebhookUrl, discordRoleId } = JSON.parse(savedConfig);
+        
+        // Telegram
         if (botToken && chatId) {
           const telegramMessage = `🔔 *${title}*\n${options.body || ''}`;
           fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
@@ -127,9 +137,23 @@ export function useNotifications(tasks) {
             })
           }).catch(err => console.error('Error enviando a Telegram:', err));
         }
+
+        // Discord
+        if (discordWebhookUrl) {
+          const discordText = `🔔 **${title}**\n${options.body || ''}`.replace(/\*/g, '**'); 
+          const body = { content: discordText };
+          if (discordRoleId) {
+             body.content = `<@&${discordRoleId}> ${discordText}`;
+          }
+          fetch(discordWebhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          }).catch(err => console.error('Error enviando a Discord:', err));
+        }
       }
     } catch (e) {
-      console.error('Error leyendo config de Telegram:', e);
+      console.error('Error leyendo config de notificaciones:', e);
     }
 
     // 2. Enviar Notificación Local de Escritorio
