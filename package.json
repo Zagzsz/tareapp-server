@@ -22,11 +22,8 @@
   "type": "commonjs",
   "dependencies": {
     "cors": "^2.8.6",
-<<<<<<< HEAD
     "discord.js": "^14.25.1",
-=======
     "date-fns": "^4.1.0",
->>>>>>> 6a77d002cf891051947524c24ea2bef77731ab03
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "multer": "^2.1.1",
