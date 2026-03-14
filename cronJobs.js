@@ -3,12 +3,18 @@ const cron = require('node-cron');
 function initCronJobs(pool) {
   // Generador de umbrales dinámicos idéntico al del Frontend
   const generateThresholds = () => {
-    const thresholds = [0];
-    for (let m = 15; m <= 240; m += 15) thresholds.push(m * 60 * 1000);
-    for (let m = 270; m <= 480; m += 30) thresholds.push(m * 60 * 1000);
-    for (let h = 12; h <= 24; h += 12) thresholds.push(h * 60 * 60 * 1000);
-    for (let d = 2; d <= 7; d++) thresholds.push(d * 24 * 60 * 60 * 1000);
-    return thresholds.sort((a, b) => b - a);
+    return [
+      0,                          // Al momento
+      15 * 60 * 1000,             // 15m
+      30 * 60 * 1000,             // 30m
+      60 * 60 * 1000,             // 1h
+      3 * 60 * 60 * 1000,         // 3h
+      6 * 60 * 60 * 1000,         // 6h
+      12 * 60 * 60 * 1000,        // 12h
+      24 * 60 * 60 * 1000,        // 24h (1 día)
+      3 * 24 * 60 * 60 * 1000,    // 3 días
+      7 * 24 * 60 * 60 * 1000     // 7 días
+    ].sort((a, b) => b - a);
   };
   const DYNAMIC_THRESHOLDS = generateThresholds();
 
@@ -24,11 +30,11 @@ function initCronJobs(pool) {
       const [tasks] = await pool.query('SELECT id, title, dueDate FROM tasks WHERE completed = 0 AND dueDate IS NOT NULL');
       if (tasks.length === 0) return;
 
-      const [settings] = await pool.query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('botToken', 'chatId')");
+      const [settings] = await pool.query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('botToken', 'chatId', 'discordWebhookUrl', 'discordRoleId')");
       const config = {};
       settings.forEach(s => config[s.setting_key] = s.setting_value);
       
-      if (!config.botToken || !config.chatId) return;
+      if (!config.botToken && !config.chatId && !config.discordWebhookUrl) return;
 
       for (const task of tasks) {
         const dueTime = new Date(task.dueDate).getTime();
@@ -58,11 +64,26 @@ function initCronJobs(pool) {
               const telegramMessage = `🔔 *${isNow ? '¡Tiempo agotado!' : 'Tarea próxima'}*\nLa tarea "${task.title}" (ID: ${task.id}) ${isNow ? 'debe entregarse ahora mismo.' : `vence en ${timeStr.trim()}.`}`;
 
               try {
-                await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ chat_id: config.chatId, text: telegramMessage, parse_mode: 'Markdown' })
-                });
+                if (config.botToken && config.chatId) {
+                  await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chat_id: config.chatId, text: telegramMessage, parse_mode: 'Markdown' })
+                  });
+                }
+
+                if (config.discordWebhookUrl) {
+                  const discordText = telegramMessage.replace(/\*/g, '**');
+                  const body = { content: discordText };
+                  if (config.discordRoleId) {
+                    body.content = `<@&${config.discordRoleId}> ${discordText}`;
+                  }
+                  await fetch(config.discordWebhookUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                  });
+                }
 
                 // REGISTRAR ENVÍO (v22)
                 await pool.query(
@@ -91,7 +112,7 @@ function initCronJobs(pool) {
     try {
       console.log('🔄 Iniciando Sincronización Automática Programada (12h)...');
       
-      const [settings] = await pool.query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('academicUser', 'academicPass', 'botToken', 'chatId')");
+      const [settings] = await pool.query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('academicUser', 'academicPass', 'botToken', 'chatId', 'discordWebhookUrl', 'discordRoleId')");
       const config = {};
       settings.forEach(s => config[s.setting_key] = s.setting_value);
 
@@ -121,6 +142,19 @@ function initCronJobs(pool) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ chat_id: config.chatId, text: syncMessage, parse_mode: 'Markdown' })
+        });
+      }
+
+      if (config.discordWebhookUrl) {
+        const syncMessageDiscord = `🎓 **Sincronización Automática Finalizada**\nSe revisó tu portal y se añadieron **${addedCount}** tareas nuevas.`;
+        const body = { content: syncMessageDiscord };
+        if (config.discordRoleId) {
+          body.content = `<@&${config.discordRoleId}> ${syncMessageDiscord}`;
+        }
+        await fetch(config.discordWebhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
         });
       }
     } catch (error) {

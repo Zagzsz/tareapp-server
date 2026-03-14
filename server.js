@@ -7,6 +7,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { scrapeAcademicManager } = require('./scraper');
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -161,6 +162,78 @@ const startTelegramPolling = async () => {
     setTimeout(startTelegramPolling, 1000); // Siguiente ciclo
 };
 
+// --- CLIENTE DISCORD BOT ---
+const discordClient = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers,
+    ]
+});
+
+discordClient.on('ready', () => {
+    console.log(`✅ Discord Bot conectado como: ${discordClient.user.tag}`);
+});
+
+discordClient.on('messageCreate', async (message) => {
+    console.log(`💬 Mensaje recibido en Discord: "${message.content}" de ${message.author.tag}`);
+    if (message.author.bot) return;
+
+    const text = message.content.toLowerCase().trim();
+    
+    if (text === '!tareas' || text === '/tareas') {
+        console.log('📝 Procesando comando !tareas...');
+        try {
+            const [tasks] = await pool.query('SELECT title, dueDate FROM tasks WHERE completed = 0 AND dueDate IS NOT NULL ORDER BY dueDate ASC');
+            
+            if (tasks.length === 0) {
+                return message.reply('🎉 No hay tareas pendientes. ¡Buen trabajo!');
+            }
+
+            const embed = new EmbedBuilder()
+                .setTitle('📋 Tareas Pendientes')
+                .setColor(0x0099FF)
+                .setTimestamp();
+
+            const taskList = tasks.map((t, i) => {
+                const due = new Date(t.dueDate);
+                const diff = due - Date.now();
+                const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+                const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+                
+                let timeStr = '';
+                if (days > 0) timeStr += `${days}d `;
+                if (hours > 0) timeStr += `${hours}h `;
+                if (mins > 0 || (days === 0 && hours === 0)) timeStr += `${mins}m`;
+
+                return `**${i + 1}. ${t.title}**\n📅 Vence: ${due.toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}\n⏳ Falta: \`${timeStr}\``;
+            }).join('\n\n');
+
+            embed.setDescription(taskList);
+            message.reply({ embeds: [embed] });
+        } catch (err) {
+            console.error('Error comando Discord:', err);
+            message.reply('❌ Error al obtener las tareas.');
+        }
+    }
+});
+
+const startDiscordBot = async () => {
+    try {
+        const [settings] = await pool.query("SELECT setting_value FROM settings WHERE setting_key = 'discordBotToken'");
+        if (settings.length > 0 && settings[0].setting_value) {
+            console.log('🤖 Intentando conectar Discord Bot...');
+            await discordClient.login(settings[0].setting_value);
+        } else {
+            console.log('ℹ️ No se encontró Discord Bot Token, bot desactivado.');
+        }
+    } catch (err) {
+        console.error('❌ Error fatal al iniciar Discord Bot:', err.message);
+    }
+};
+
 async function sendTelegram(token, chatId, text) {
     try {
         await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -171,8 +244,24 @@ async function sendTelegram(token, chatId, text) {
     } catch (e) { console.error('Error en sendTelegram:', e.message); }
 }
 
-// Iniciar Polling al arrancar
+async function sendDiscord(webhookUrl, content, roleId = null) {
+    try {
+        if (!webhookUrl) return;
+        const body = { content };
+        if (roleId) {
+            body.content = `<@&${roleId}> ${content}`;
+        }
+        await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+    } catch (e) { console.error('Error en sendDiscord:', e.message); }
+}
+
+// Iniciar Bots al arrancar
 startTelegramPolling();
+startDiscordBot();
 
 // --- ENDPOINTS API REST ---
 
@@ -325,11 +414,25 @@ app.get('/api/settings', async (req, res) => {
 
 app.post('/api/settings', async (req, res) => {
   try {
-    const { botToken, chatId, academicUser, academicPass } = req.body;
+    const { botToken, chatId, academicUser, academicPass, discordWebhookUrl, discordRoleId, discordBotToken } = req.body;
     if (botToken) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('botToken', ?)", [botToken]);
     if (chatId) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('chatId', ?)", [chatId]);
     if (academicUser) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicUser', ?)", [academicUser]);
     if (academicPass) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicPass', ?)", [academicPass]);
+    if (discordWebhookUrl !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('discordWebhookUrl', ?)", [discordWebhookUrl]);
+    if (discordRoleId !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('discordRoleId', ?)", [discordRoleId]);
+    if (discordBotToken !== undefined) {
+      await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('discordBotToken', ?)", [discordBotToken]);
+      // Reiniciar bot si el token cambió o es nuevo
+      try {
+          if (discordClient.isReady()) {
+              await discordClient.destroy();
+          }
+          await discordClient.login(discordBotToken);
+      } catch (err) {
+          console.error('Error reiniciando Discord Bot:', err.message);
+      }
+    }
     res.json({ message: 'Configuraciones actualizadas' });
   } catch (error) {
     console.error(error);
@@ -346,16 +449,26 @@ app.get('/api/check-notifications', async (req, res) => {
     const config = {};
     settings.forEach(s => config[s.setting_key] = s.setting_value);
 
-    if (!config.botToken || !config.chatId || tasks.length === 0) {
-      return res.json({ checked: 0, sent: 0, message: 'Sin tareas pendientes o sin Telegram configurado' });
+    if ((!config.botToken || !config.chatId) && !config.discordWebhookUrl) {
+      return res.json({ checked: 0, sent: 0, message: 'Falta configuración de notificaciones (Telegram o Discord)' });
+    }
+    if (tasks.length === 0) {
+      return res.json({ checked: 0, sent: 0, message: 'Sin tareas pendientes' });
     }
 
-    // Definir umbrales dinámicos
-    const thresholds = [0];
-    for (let m = 15; m <= 240; m += 15) thresholds.push(m * 60 * 1000);
-    for (let m = 270; m <= 480; m += 30) thresholds.push(m * 60 * 1000);
-    for (let h = 12; h <= 24; h += 12) thresholds.push(h * 60 * 60 * 1000);
-    for (let d = 2; d <= 7; d++) thresholds.push(d * 24 * 60 * 60 * 1000);
+    // Umbrales dinámicos refinados (Hitos específicos para evitar spam)
+    const thresholds = [
+      0,                          // Al momento
+      15 * 60 * 1000,             // 15m
+      30 * 60 * 1000,             // 30m
+      60 * 60 * 1000,             // 1h
+      3 * 60 * 60 * 1000,         // 3h
+      6 * 60 * 60 * 1000,         // 6h
+      12 * 60 * 60 * 1000,        // 12h
+      24 * 60 * 60 * 1000,        // 24h (1 día)
+      3 * 24 * 60 * 60 * 1000,    // 3 días
+      7 * 24 * 60 * 60 * 1000     // 7 días
+    ];
     thresholds.sort((a, b) => b - a);
 
     let sent = 0;
@@ -365,44 +478,53 @@ app.get('/api/check-notifications', async (req, res) => {
       if (timeRemaining < -60000) continue;
 
       for (let threshold of thresholds) {
-        if (timeRemaining <= threshold && timeRemaining > threshold - 120000) {
-          const isNow = threshold === 0;
-          const minutesTotal = Math.round(threshold / 60000);
-          const hours = Math.floor(minutesTotal / 60);
-          const mins = minutesTotal % 60;
-          let timeStr = '';
-          if (hours > 0) timeStr += `${hours}h `;
-          if (mins > 0 || hours === 0) timeStr += `${mins}m`;
+        // Ventana de 30 segundos (igual que cronJobs.js)
+        if (timeRemaining <= threshold && timeRemaining > threshold - 30000) {
+          // VERIFICAR SI YA SE ENVIÓ (persistencia)
+          const [alreadySent] = await pool.query(
+            'SELECT id FROM sent_notifications WHERE task_id = ? AND threshold = ?',
+            [task.id, threshold]
+          );
 
-          const text = `🔔 *${isNow ? '¡Tiempo agotado!' : 'Tarea próxima'}*\nLa tarea "${task.title}" (ID: ${task.id}) ${isNow ? 'debe entregarse ahora mismo.' : `vence en ${timeStr.trim()}.`}`;
-          try {
-            await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ chat_id: config.chatId, text, parse_mode: 'Markdown' })
-            });
-            sent++;
-          } catch (e) { console.error('Telegram error:', e.message); }
+          if (alreadySent.length === 0) {
+            const isNow = threshold === 0;
+            const minutesTotal = Math.round(threshold / 60000);
+            const hours = Math.floor(minutesTotal / 60);
+            const mins = minutesTotal % 60;
+            let timeStr = '';
+            if (hours > 0) timeStr += `${hours}h `;
+            if (mins > 0 || hours === 0) timeStr += `${mins}m`;
+
+            const text = `🔔 *${isNow ? '¡Tiempo agotado!' : 'Tarea próxima'}*\nLa tarea "${task.title}" (ID: ${task.id}) ${isNow ? 'debe entregarse ahora mismo.' : `vence en ${timeStr.trim()}.`}`;
+            try {
+              if (config.botToken && config.chatId) {
+                await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ chat_id: config.chatId, text, parse_mode: 'Markdown' })
+                });
+              }
+
+              if (config.discordWebhookUrl) {
+                // Limpiar markdown de Telegram para Discord (opcional, pero Discord usa markdown similar)
+                const discordText = text.replace(/\*/g, '**'); 
+                await sendDiscord(config.discordWebhookUrl, discordText, config.discordRoleId);
+              }
+
+              // REGISTRAR ENVÍO EN BD
+              await pool.query(
+                'INSERT IGNORE INTO sent_notifications (task_id, threshold) VALUES (?, ?)',
+                [task.id, threshold]
+              );
+              sent++;
+            } catch (e) { console.error('Notification error:', e.message); }
+          }
           break;
         }
       }
     }
 
-    // --- NUEVO: Reporte de Tareas Pendientes (Para el Botón de Prueba) ---
-    if (config.botToken && config.chatId && tasks.length > 0) {
-      const pendingList = tasks.map(t => `• *${t.title}* (ID: ${t.id})${t.category ? ` [${t.category}]` : ''}`).join('\n');
-      const testMessage = `📋 *Reporte de Tareas Pendientes*\nTotal: ${tasks.length} tareas\n\n${pendingList}`;
-      
-      try {
-        await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: config.chatId, text: testMessage, parse_mode: 'Markdown' })
-        });
-      } catch (e) { console.error('Error enviando reporte de prueba:', e.message); }
-    }
-
-    res.json({ checked: tasks.length, sent, message: `Se revisaron ${tasks.length} tareas, se enviaron ${sent} alertas y el reporte completo.` });
+    res.json({ checked: tasks.length, sent, message: `Se revisaron ${tasks.length} tareas, se enviaron ${sent} alertas nuevas.` });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error verificando notificaciones' });
