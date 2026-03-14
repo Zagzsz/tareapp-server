@@ -8,6 +8,7 @@ export function SettingsModal({ onClose }) {
   const [botToken, setBotToken] = useState('');
   const [chatId, setChatId] = useState('');
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
+  const [discordRoleId, setDiscordRoleId] = useState('');
   const [academicUser, setAcademicUser] = useState('');
   const [academicPass, setAcademicPass] = useState('');
   const [isSaved, setIsSaved] = useState(false);
@@ -24,6 +25,7 @@ export function SettingsModal({ onClose }) {
           if (data.botToken) setBotToken(data.botToken);
           if (data.chatId) setChatId(data.chatId);
           if (data.discordWebhookUrl) setDiscordWebhookUrl(data.discordWebhookUrl);
+          if (data.discordRoleId) setDiscordRoleId(data.discordRoleId);
           if (data.academicUser) setAcademicUser(data.academicUser);
           if (data.academicPass) setAcademicPass(data.academicPass);
           return;
@@ -39,6 +41,7 @@ export function SettingsModal({ onClose }) {
           setBotToken(parsed.botToken || '');
           setChatId(parsed.chatId || '');
           setDiscordWebhookUrl(parsed.discordWebhookUrl || '');
+          setDiscordRoleId(parsed.discordRoleId || '');
           setAcademicUser(parsed.academicUser || '');
           setAcademicPass(parsed.academicPass || '');
         }
@@ -52,14 +55,14 @@ export function SettingsModal({ onClose }) {
     e.preventDefault();
     try {
       // Guardar en localStorage
-      localStorage.setItem(TELEGRAM_CONFIG_KEY, JSON.stringify({ botToken, chatId, discordWebhookUrl, academicUser, academicPass }));
+      localStorage.setItem(TELEGRAM_CONFIG_KEY, JSON.stringify({ botToken, chatId, discordWebhookUrl, discordRoleId, academicUser, academicPass }));
       
       // Guardar en el Backend
       try {
         await fetch(`${API_URL}/settings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ botToken, chatId, discordWebhookUrl, academicUser, academicPass })
+          body: JSON.stringify({ botToken, chatId, discordWebhookUrl, discordRoleId, academicUser, academicPass })
         });
       } catch (apiErr) {
         console.warn('No se pudo guardar en el servidor:', apiErr);
@@ -162,6 +165,21 @@ export function SettingsModal({ onClose }) {
                   placeholder="Ej: https://discord.com/api/webhooks/..."
                   className="settings-input"
                 />
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="discordRoleId">ID de Rol a Mencionar (Opcional)</label>
+                <input 
+                  id="discordRoleId"
+                  type="text" 
+                  value={discordRoleId}
+                  onChange={(e) => setDiscordRoleId(e.target.value)}
+                  placeholder="Ej: 123456789012345678"
+                  className="settings-input"
+                />
+                <small style={{ color: '#888', fontSize: '0.8rem', marginTop: '4px', display: 'block' }}>
+                  Pega aquí el ID del rol para arrobar a tus amigos.
+                </small>
               </div>
 
               <button type="submit" className={`btn primary ${isSaved ? 'success' : ''}`}>
