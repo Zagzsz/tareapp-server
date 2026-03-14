@@ -9,6 +9,7 @@ export function SettingsModal({ onClose }) {
   const [chatId, setChatId] = useState('');
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
   const [discordRoleId, setDiscordRoleId] = useState('');
+  const [discordBotToken, setDiscordBotToken] = useState('');
   const [academicUser, setAcademicUser] = useState('');
   const [academicPass, setAcademicPass] = useState('');
   const [isSaved, setIsSaved] = useState(false);
@@ -26,6 +27,7 @@ export function SettingsModal({ onClose }) {
           if (data.chatId) setChatId(data.chatId);
           if (data.discordWebhookUrl) setDiscordWebhookUrl(data.discordWebhookUrl);
           if (data.discordRoleId) setDiscordRoleId(data.discordRoleId);
+          if (data.discordBotToken) setDiscordBotToken(data.discordBotToken);
           if (data.academicUser) setAcademicUser(data.academicUser);
           if (data.academicPass) setAcademicPass(data.academicPass);
           return;
@@ -42,6 +44,7 @@ export function SettingsModal({ onClose }) {
           setChatId(parsed.chatId || '');
           setDiscordWebhookUrl(parsed.discordWebhookUrl || '');
           setDiscordRoleId(parsed.discordRoleId || '');
+          setDiscordBotToken(parsed.discordBotToken || '');
           setAcademicUser(parsed.academicUser || '');
           setAcademicPass(parsed.academicPass || '');
         }
@@ -55,14 +58,14 @@ export function SettingsModal({ onClose }) {
     e.preventDefault();
     try {
       // Guardar en localStorage
-      localStorage.setItem(TELEGRAM_CONFIG_KEY, JSON.stringify({ botToken, chatId, discordWebhookUrl, discordRoleId, academicUser, academicPass }));
+      localStorage.setItem(TELEGRAM_CONFIG_KEY, JSON.stringify({ botToken, chatId, discordWebhookUrl, discordRoleId, discordBotToken, academicUser, academicPass }));
       
       // Guardar en el Backend
       try {
         await fetch(`${API_URL}/settings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ botToken, chatId, discordWebhookUrl, discordRoleId, academicUser, academicPass })
+          body: JSON.stringify({ botToken, chatId, discordWebhookUrl, discordRoleId, discordBotToken, academicUser, academicPass })
         });
       } catch (apiErr) {
         console.warn('No se pudo guardar en el servidor:', apiErr);
@@ -179,6 +182,21 @@ export function SettingsModal({ onClose }) {
                 />
                 <small style={{ color: '#888', fontSize: '0.8rem', marginTop: '4px', display: 'block' }}>
                   Pega aquí el ID del rol para arrobar a tus amigos.
+                </small>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="discordBotToken">Discord Bot Token (Opcional)</label>
+                <input 
+                  id="discordBotToken"
+                  type="password" 
+                  value={discordBotToken}
+                  onChange={(e) => setDiscordBotToken(e.target.value)}
+                  placeholder="MTQ4..."
+                  className="settings-input"
+                />
+                <small style={{ color: '#888', fontSize: '0.8rem', marginTop: '4px', display: 'block' }}>
+                  Necesario para que el comando !tareas funcione.
                 </small>
               </div>
 
