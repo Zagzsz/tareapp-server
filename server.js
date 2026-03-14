@@ -219,6 +219,37 @@ discordClient.on('messageCreate', async (message) => {
             message.reply('❌ Error al obtener las tareas.');
         }
     }
+    else if (text === '!sync' || text === '/sync') {
+        console.log('🔄 Procesando comando !sync desde Discord...');
+        try {
+            // Obtener credenciales desde la base de datos
+            const [settings] = await pool.query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('academicUser', 'academicPass')");
+            const config = {};
+            settings.forEach(s => config[s.setting_key] = s.setting_value);
+
+            if (!config.academicUser || !config.academicPass) {
+                return message.reply("❌ No tienes credenciales configuradas en la app.");
+            }
+
+            message.reply("⏳ Iniciando sincronización... te avisaré al terminar.");
+
+            const academicTasks = await scrapeAcademicManager(config.academicUser, config.academicPass);
+            let added = 0;
+            for (const task of academicTasks) {
+                const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
+                if (existing.length === 0) {
+                    const mysqlDate = new Date(task.dueDate).toISOString().slice(0, 19).replace('T', ' ');
+                    if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
+                    await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
+                    added++;
+                }
+            }
+            message.reply(`✅ Sincronización finalizada.\n📦 Tareas encontradas: **${academicTasks.length}**\n✨ Tareas nuevas: **${added}**`);
+        } catch (err) {
+            console.error('Error sync Discord:', err);
+            message.reply(`❌ Error al sincronizar: ${err.message}`);
+        }
+    }
 });
 
 const startDiscordBot = async () => {

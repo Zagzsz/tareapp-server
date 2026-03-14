@@ -106,9 +106,9 @@ function initCronJobs(pool) {
   });
 
   // =========================================================================
-  // 2. Cron Job: Sincronización Automática de Academic Manager (Cada 12 horas)
+  // 2. Cron Job: Sincronización Automática de Academic Manager (Cada 12 horas - 6am y 6pm)
   // =========================================================================
-  cron.schedule('0 0,12 * * *', async () => {
+  cron.schedule('0 6,18 * * *', async () => {
     try {
       console.log('🔄 Iniciando Sincronización Automática Programada (12h)...');
       
