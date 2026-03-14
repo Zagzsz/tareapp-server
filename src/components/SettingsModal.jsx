@@ -7,6 +7,7 @@ const TELEGRAM_CONFIG_KEY = 'app_tareas_telegram_config';
 export function SettingsModal({ onClose }) {
   const [botToken, setBotToken] = useState('');
   const [chatId, setChatId] = useState('');
+  const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
   const [academicUser, setAcademicUser] = useState('');
   const [academicPass, setAcademicPass] = useState('');
   const [isSaved, setIsSaved] = useState(false);
@@ -22,6 +23,7 @@ export function SettingsModal({ onClose }) {
           const data = await res.json();
           if (data.botToken) setBotToken(data.botToken);
           if (data.chatId) setChatId(data.chatId);
+          if (data.discordWebhookUrl) setDiscordWebhookUrl(data.discordWebhookUrl);
           if (data.academicUser) setAcademicUser(data.academicUser);
           if (data.academicPass) setAcademicPass(data.academicPass);
           return;
@@ -36,6 +38,7 @@ export function SettingsModal({ onClose }) {
           const parsed = JSON.parse(savedConfig);
           setBotToken(parsed.botToken || '');
           setChatId(parsed.chatId || '');
+          setDiscordWebhookUrl(parsed.discordWebhookUrl || '');
           setAcademicUser(parsed.academicUser || '');
           setAcademicPass(parsed.academicPass || '');
         }
@@ -49,14 +52,14 @@ export function SettingsModal({ onClose }) {
     e.preventDefault();
     try {
       // Guardar en localStorage
-      localStorage.setItem(TELEGRAM_CONFIG_KEY, JSON.stringify({ botToken, chatId, academicUser, academicPass }));
+      localStorage.setItem(TELEGRAM_CONFIG_KEY, JSON.stringify({ botToken, chatId, discordWebhookUrl, academicUser, academicPass }));
       
       // Guardar en el Backend
       try {
         await fetch(`${API_URL}/settings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ botToken, chatId, academicUser, academicPass })
+          body: JSON.stringify({ botToken, chatId, discordWebhookUrl, academicUser, academicPass })
         });
       } catch (apiErr) {
         console.warn('No se pudo guardar en el servidor:', apiErr);
@@ -140,6 +143,29 @@ export function SettingsModal({ onClose }) {
 
               <button type="submit" className={`btn primary ${isSaved ? 'success' : ''}`}>
                 {isSaved ? '¡Guardado!' : 'Guardar Telegram'}
+              </button>
+            </form>
+          </section>
+
+          <hr className="settings-divider" />
+
+          <section className="settings-section">
+            <h3>Notificaciones de Discord 👾</h3>
+            <form onSubmit={handleSave} className="settings-form">
+              <div className="form-group">
+                <label htmlFor="discordWebhookUrl">Webhook URL de Discord</label>
+                <input 
+                  id="discordWebhookUrl"
+                  type="text" 
+                  value={discordWebhookUrl}
+                  onChange={(e) => setDiscordWebhookUrl(e.target.value)}
+                  placeholder="Ej: https://discord.com/api/webhooks/..."
+                  className="settings-input"
+                />
+              </div>
+
+              <button type="submit" className={`btn primary ${isSaved ? 'success' : ''}`}>
+                {isSaved ? '¡Guardado!' : 'Guardar Discord'}
               </button>
             </form>
           </section>
