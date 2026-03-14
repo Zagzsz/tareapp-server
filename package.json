@@ -4,7 +4,13 @@
   "description": "Backend API para TareApp - Gestor de tareas con notificaciones",
   "main": "server.js",
   "scripts": {
+    "dev": "vite --host",
     "start": "node server.js",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "electron-dev": "concurrently \"vite\" \"electron .\"",
+    "dist-exe": "vite build && electron-builder --win nsis",
     "test": "echo \"No tests\" && exit 0"
   },
   "engines": {
@@ -16,12 +22,36 @@
   "type": "commonjs",
   "dependencies": {
     "cors": "^2.8.6",
+<<<<<<< HEAD
     "discord.js": "^14.25.1",
+=======
+    "date-fns": "^4.1.0",
+>>>>>>> 6a77d002cf891051947524c24ea2bef77731ab03
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "multer": "^2.1.1",
     "mysql2": "^3.19.0",
     "node-cron": "^4.2.1",
-    "puppeteer": "^24.38.0"
+    "puppeteer": "^24.38.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "^34.1.0",
+    "electron-builder": "^26.8.1",
+    "vite": "^6.1.1"
+  },
+  "build": {
+    "appId": "com.zagzsz.tareapp",
+    "productName": "TareApp",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico"
+    }
   }
 }
