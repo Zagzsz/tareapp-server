@@ -1,4 +1,5 @@
 require('dotenv').config();
+process.env.TZ = 'America/Mexico_City';
 console.log('--- SERVER BOOTSTRAP STARTING ---');
 const express = require('express');
 const cors = require('cors');
