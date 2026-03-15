@@ -179,10 +179,15 @@ discordClient.on('ready', () => {
 });
 
 discordClient.on('messageCreate', async (message) => {
-    console.log(`💬 Mensaje recibido en Discord: "${message.content}" de ${message.author.tag}`);
     if (message.author.bot) return;
 
     const text = message.content.toLowerCase().trim();
+    if (!text) return; // Ignorar mensajes vacíos
+
+    // Solo procesar si empieza con ! o /
+    if (!text.startsWith('!') && !text.startsWith('/')) return;
+
+    console.log(`💬 Comando recibido en Discord: "${text}" de ${message.author.tag}`);
     
     if (text === '!tareas' || text === '/tareas') {
         console.log('📝 Procesando comando !tareas...');
