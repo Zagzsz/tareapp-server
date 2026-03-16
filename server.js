@@ -126,13 +126,14 @@ const startTelegramPolling = async () => {
                             let added = 0;
                             for (const task of academicTasks) {
                                 const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
+                                const mysqlDate = new Date(task.dueDate).toISOString().slice(0, 19).replace('T', ' ');
                                 if (existing.length === 0) {
-                                    // Normalizar fecha para MySQL (YYYY-MM-DD HH:MM:SS)
-                                    const mysqlDate = new Date(task.dueDate).toISOString().slice(0, 19).replace('T', ' ');
-                                    
                                     if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
                                     await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
                                     added++;
+                                } else {
+                                    const [updateRes] = await pool.query("UPDATE tasks SET dueDate = ? WHERE id = ?", [mysqlDate, existing[0].id]);
+                                    if (updateRes.changedRows > 0) await pool.query("DELETE FROM sent_notifications WHERE task_id = ?", [existing[0].id]);
                                 }
                             }
                             await sendTelegram(config.botToken, chatId, `✅ Sync lista. Halladas: ${academicTasks.length}, Nuevas: ${added}`);
@@ -591,11 +592,9 @@ app.post('/api/sync-academic', async (req, res) => {
     for (const task of academicTasks) {
       // Verificar si ya existe una tarea con el mismo título para evitar duplicados
       const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
+      const mysqlDate = new Date(task.dueDate).toISOString().slice(0, 19).replace('T', ' ');
       
         if (existing.length === 0) {
-          // Normalizar fecha para MySQL (YYYY-MM-DD HH:MM:SS)
-          const mysqlDate = new Date(task.dueDate).toISOString().slice(0, 19).replace('T', ' ');
-
           // Asegurar que la categoría exista en la tabla categories
           if (task.category && task.category !== 'General') {
             await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
@@ -606,6 +605,9 @@ app.post('/api/sync-academic', async (req, res) => {
             [task.title, task.description, mysqlDate, task.category || 'General']
           );
           addedCount++;
+        } else {
+          const [updateRes] = await pool.query("UPDATE tasks SET dueDate = ? WHERE id = ?", [mysqlDate, existing[0].id]);
+          if (updateRes.changedRows > 0) await pool.query("DELETE FROM sent_notifications WHERE task_id = ?", [existing[0].id]);
         }
     }
 
