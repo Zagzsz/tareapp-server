@@ -265,9 +265,9 @@ discordClient.on('messageCreate', async (message) => {
 const startDiscordBot = async () => {
     try {
         const [settings] = await pool.query("SELECT setting_value FROM settings WHERE setting_key = 'discordBotToken'");
-        if (settings.length > 0 && settings[0].setting_value && settings[0].setting_value.trim() !== '') {
+        if (settings.length > 0 && settings[0].setting_value && settings[0].setting_value.replace(/\s+/g, '') !== '') {
             console.log('🤖 Intentando conectar Discord Bot...');
-            await discordClient.login(settings[0].setting_value.trim());
+            await discordClient.login(settings[0].setting_value.replace(/\s+/g, ''));
         } else {
             console.log('ℹ️ No se encontró Discord Bot Token, bot desactivado.');
         }
@@ -457,25 +457,27 @@ app.get('/api/settings', async (req, res) => {
 app.post('/api/settings', async (req, res) => {
   try {
     const { botToken, chatId, academicUser, academicPass, discordWebhookUrl, discordRoleId, discordBotToken } = req.body;
-    if (botToken !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('botToken', ?)", [botToken.trim()]);
-    if (chatId !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('chatId', ?)", [chatId.trim()]);
+    if (botToken !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('botToken', ?)", [botToken.replace(/\s+/g, '')]);
+    if (chatId !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('chatId', ?)", [chatId.replace(/\s+/g, '')]);
     if (academicUser) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicUser', ?)", [academicUser.trim()]);
     if (academicPass) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicPass', ?)", [academicPass]);
-    if (discordWebhookUrl !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('discordWebhookUrl', ?)", [discordWebhookUrl.trim()]);
-    if (discordRoleId !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('discordRoleId', ?)", [discordRoleId.trim()]);
+    if (discordWebhookUrl !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('discordWebhookUrl', ?)", [discordWebhookUrl.replace(/\s+/g, '')]);
+    if (discordRoleId !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('discordRoleId', ?)", [discordRoleId.replace(/\s+/g, '')]);
     if (discordBotToken !== undefined) {
-      const cleanDiscordBotToken = discordBotToken.trim();
+      const cleanDiscordBotToken = discordBotToken.replace(/\s+/g, '');
       await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('discordBotToken', ?)", [cleanDiscordBotToken]);
       // Reiniciar bot si el token cambió o es nuevo
       try {
           if (discordClient.isReady()) {
-              await discordClient.destroy();
+              discordClient.destroy();
           }
           if (cleanDiscordBotToken !== '') {
-              await discordClient.login(cleanDiscordBotToken);
+              discordClient.login(cleanDiscordBotToken).catch(err => {
+                  console.error('Error asíncrono al reiniciar Discord Bot:', err.message);
+              });
           }
       } catch (err) {
-          console.error('Error reiniciando Discord Bot:', err.message);
+          console.error('Error sincrónico reiniciando Discord Bot:', err.message);
       }
     }
     res.json({ message: 'Configuraciones actualizadas' });

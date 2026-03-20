@@ -59,14 +59,14 @@ export function SettingsModal({ onClose }) {
     try {
       const savedConfig = localStorage.getItem(TELEGRAM_CONFIG_KEY);
       const configObj = savedConfig ? JSON.parse(savedConfig) : {};
-      const newConfig = { ...configObj, botToken: botToken.trim(), chatId: chatId.trim() };
+      const newConfig = { ...configObj, botToken: botToken.replace(/\s+/g, ''), chatId: chatId.replace(/\s+/g, '') };
       localStorage.setItem(TELEGRAM_CONFIG_KEY, JSON.stringify(newConfig));
       
       try {
         await fetch(`${API_URL}/settings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ botToken: botToken.trim(), chatId: chatId.trim() })
+          body: JSON.stringify({ botToken: botToken.replace(/\s+/g, ''), chatId: chatId.replace(/\s+/g, '') })
         });
       } catch (apiErr) {
         console.warn('No se pudo guardar Telegram en el servidor:', apiErr);
@@ -83,9 +83,9 @@ export function SettingsModal({ onClose }) {
   const handleSaveDiscord = async (e) => {
     e.preventDefault();
     try {
-      const trimmedToken = discordBotToken.trim();
-      const trimmedWebhook = discordWebhookUrl.trim();
-      const trimmedRole = discordRoleId.trim();
+      const trimmedToken = discordBotToken.replace(/\s+/g, '');
+      const trimmedWebhook = discordWebhookUrl.replace(/\s+/g, '');
+      const trimmedRole = discordRoleId.replace(/\s+/g, '');
       
       const savedConfig = localStorage.getItem(TELEGRAM_CONFIG_KEY);
       const configObj = savedConfig ? JSON.parse(savedConfig) : {};
