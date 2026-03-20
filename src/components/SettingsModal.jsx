@@ -54,29 +54,58 @@ export function SettingsModal({ onClose }) {
     };
     loadConfig();
   }, []);
-  const handleSave = async (e) => {
+  const handleSaveTelegram = async (e) => {
     e.preventDefault();
     try {
-      // Guardar en localStorage
-      localStorage.setItem(TELEGRAM_CONFIG_KEY, JSON.stringify({ botToken, chatId, discordWebhookUrl, discordRoleId, discordBotToken, academicUser, academicPass }));
+      const savedConfig = localStorage.getItem(TELEGRAM_CONFIG_KEY);
+      const configObj = savedConfig ? JSON.parse(savedConfig) : {};
+      const newConfig = { ...configObj, botToken: botToken.trim(), chatId: chatId.trim() };
+      localStorage.setItem(TELEGRAM_CONFIG_KEY, JSON.stringify(newConfig));
       
-      // Guardar en el Backend
       try {
         await fetch(`${API_URL}/settings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ botToken, chatId, discordWebhookUrl, discordRoleId, discordBotToken, academicUser, academicPass })
+          body: JSON.stringify({ botToken: botToken.trim(), chatId: chatId.trim() })
         });
       } catch (apiErr) {
-        console.warn('No se pudo guardar en el servidor:', apiErr);
+        console.warn('No se pudo guardar Telegram en el servidor:', apiErr);
       }
-
       setIsSaved(true);
-      setTimeout(() => {
-        setIsSaved(false);
-      }, 1500);
+      setTimeout(() => setIsSaved(false), 1500);
+      alert('Configuración de Telegram guardada.');
     } catch (error) {
-      console.error('Error guardando config:', error);
+      console.error('Error guardando config Telegram:', error);
+      alert('Error guardando la configuración');
+    }
+  };
+
+  const handleSaveDiscord = async (e) => {
+    e.preventDefault();
+    try {
+      const trimmedToken = discordBotToken.trim();
+      const trimmedWebhook = discordWebhookUrl.trim();
+      const trimmedRole = discordRoleId.trim();
+      
+      const savedConfig = localStorage.getItem(TELEGRAM_CONFIG_KEY);
+      const configObj = savedConfig ? JSON.parse(savedConfig) : {};
+      const newConfig = { ...configObj, discordWebhookUrl: trimmedWebhook, discordRoleId: trimmedRole, discordBotToken: trimmedToken };
+      localStorage.setItem(TELEGRAM_CONFIG_KEY, JSON.stringify(newConfig));
+      
+      try {
+        await fetch(`${API_URL}/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ discordWebhookUrl: trimmedWebhook, discordRoleId: trimmedRole, discordBotToken: trimmedToken })
+        });
+      } catch (apiErr) {
+        console.warn('No se pudo guardar Discord en el servidor:', apiErr);
+      }
+      setIsSaved(true);
+      setTimeout(() => setIsSaved(false), 1500);
+      alert('Configuración de Discord guardada.');
+    } catch (error) {
+      console.error('Error guardando config Discord:', error);
       alert('Error guardando la configuración');
     }
   };
@@ -122,7 +151,7 @@ export function SettingsModal({ onClose }) {
         <div className="settings-tabs">
           <section className="settings-section">
             <h3>Notificaciones de Telegram 🚀</h3>
-            <form onSubmit={handleSave} className="settings-form">
+            <form onSubmit={handleSaveTelegram} className="settings-form">
               <div className="form-group">
                 <label htmlFor="botToken">Token de Nuevo Bot (BotFather)</label>
                 <input 
@@ -157,7 +186,7 @@ export function SettingsModal({ onClose }) {
 
           <section className="settings-section">
             <h3>Notificaciones de Discord 👾</h3>
-            <form onSubmit={handleSave} className="settings-form">
+            <form onSubmit={handleSaveDiscord} className="settings-form">
               <div className="form-group">
                 <label htmlFor="discordWebhookUrl">Webhook URL de Discord</label>
                 <input 
