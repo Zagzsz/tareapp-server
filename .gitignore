@@ -6,3 +6,4 @@ dist_electron/
 .cache/
 *.log
 .DS_Store
+test_*.js

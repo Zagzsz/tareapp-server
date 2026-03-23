@@ -108,7 +108,11 @@ const startTelegramPolling = async () => {
                     await sendTelegram(config.botToken, chatId, welcome);
                 } 
                 else if (text === '/tareas') {
-                    const [tasks] = await pool.query('SELECT id, title, category FROM tasks WHERE completed = 0 ORDER BY dueDate ASC');
+                    let [tasks] = await pool.query('SELECT id, title, category, dueDate FROM tasks WHERE completed = 0 ORDER BY dueDate ASC');
+                    
+                    const nowTime = Date.now();
+                    tasks = tasks.filter(t => !t.dueDate || (nowTime - new Date(t.dueDate).getTime()) <= 12 * 60 * 60 * 1000);
+
                     if (tasks.length === 0) {
                         await sendTelegram(config.botToken, chatId, "✅ No tienes tareas pendientes.");
                     } else {
@@ -126,7 +130,7 @@ const startTelegramPolling = async () => {
                             let added = 0;
                             for (const task of academicTasks) {
                                 const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
-                                const mysqlDate = new Date(task.dueDate).toISOString().slice(0, 19).replace('T', ' ');
+                                const mysqlDate = task.dueDate;
                                 if (existing.length === 0) {
                                     if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
                                     await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
@@ -193,8 +197,11 @@ discordClient.on('messageCreate', async (message) => {
     if (text === '!tareas' || text === '/tareas') {
         console.log('📝 Procesando comando !tareas...');
         try {
-            const [tasks] = await pool.query('SELECT title, dueDate FROM tasks WHERE completed = 0 AND dueDate IS NOT NULL ORDER BY dueDate ASC');
+            let [tasks] = await pool.query('SELECT title, dueDate FROM tasks WHERE completed = 0 AND dueDate IS NOT NULL ORDER BY dueDate ASC');
             
+            const nowTime = Date.now();
+            tasks = tasks.filter(t => (nowTime - new Date(t.dueDate).getTime()) <= 12 * 60 * 60 * 1000);
+
             if (tasks.length === 0) {
                 return message.reply('🎉 No hay tareas pendientes. ¡Buen trabajo!');
             }
@@ -244,7 +251,7 @@ discordClient.on('messageCreate', async (message) => {
             let added = 0;
             for (const task of academicTasks) {
                 const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
-                const mysqlDate = new Date(task.dueDate).toISOString().slice(0, 19).replace('T', ' ');
+                const mysqlDate = task.dueDate;
                 if (existing.length === 0) {
                     if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
                     await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
@@ -600,7 +607,7 @@ app.post('/api/sync-academic', async (req, res) => {
     for (const task of academicTasks) {
       // Verificar si ya existe una tarea con el mismo título para evitar duplicados
       const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
-      const mysqlDate = new Date(task.dueDate).toISOString().slice(0, 19).replace('T', ' ');
+      const mysqlDate = task.dueDate;
       
         if (existing.length === 0) {
           // Asegurar que la categoría exista en la tabla categories

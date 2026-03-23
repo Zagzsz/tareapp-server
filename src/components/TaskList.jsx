@@ -15,13 +15,18 @@ export function TaskList({ tasks, onToggle, onDelete, onAddAttachment, onDeleteA
     );
   }
 
+  // Ocultar tareas que vencieron hace más de 12 horas
+  const nowTime = new Date().getTime();
+  const TWELVE_HOURS = 12 * 60 * 60 * 1000;
+  const activeTasks = tasks.filter(t => !(!t.completed && t.dueDate && (nowTime - new Date(t.dueDate).getTime()) > TWELVE_HOURS));
+
   // Obtener categorías únicas actuales
-  const uniqueCategories = ['Todas', ...new Set(tasks.map(t => t.category || 'General'))];
+  const uniqueCategories = ['Todas', ...new Set(activeTasks.map(t => t.category || 'General'))];
 
   // Filtrar tareas por categoría
   const filteredTasks = filterCategory === 'Todas' 
-    ? tasks 
-    : tasks.filter(t => (t.category || 'General') === filterCategory);
+    ? activeTasks 
+    : activeTasks.filter(t => (t.category || 'General') === filterCategory);
 
   const sortedTasks = [...filteredTasks].sort((a, b) => {
     if (a.completed !== b.completed) {
