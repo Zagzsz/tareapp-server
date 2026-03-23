@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "electron-dev": "concurrently \"vite\" \"electron .\"",
     "dist-exe": "vite build && electron-builder --win nsis",
-    "test": "echo \"No tests\" && exit 0"
+    "test": "echo \"No tests\" && exit 0",
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "engines": {
     "node": ">=18.0.0"
