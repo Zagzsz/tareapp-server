@@ -214,16 +214,22 @@ discordClient.on('messageCreate', async (message) => {
             const taskList = tasks.map((t, i) => {
                 const due = new Date(t.dueDate);
                 const diff = due - Date.now();
-                const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-                const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-                const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+                const absDiff = Math.abs(diff);
+                const isExpired = diff < 0;
+
+                const days = Math.floor(absDiff / (1000 * 60 * 60 * 24));
+                const hours = Math.floor((absDiff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                const mins = Math.floor((absDiff % (1000 * 60 * 60)) / (1000 * 60));
                 
                 let timeStr = '';
                 if (days > 0) timeStr += `${days}d `;
                 if (hours > 0) timeStr += `${hours}h `;
                 if (mins > 0 || (days === 0 && hours === 0)) timeStr += `${mins}m`;
 
-                return `**${i + 1}. ${t.title}**\n📅 Vence: ${due.toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}\n⏳ Falta: \`${timeStr}\``;
+                const statusLabel = isExpired ? '❌ Expirada' : '⏳ Falta';
+                const timeLabel = isExpired ? 'Pasó hace' : 'Tiempo';
+
+                return `**${i + 1}. ${t.title}**\n📅 **Vence:** ${due.toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}\n${statusLabel} | ${timeLabel}: \`${timeStr}\``;
             }).join('\n\n');
 
             embed.setDescription(taskList);
