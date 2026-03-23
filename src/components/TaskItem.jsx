@@ -18,7 +18,8 @@ export function TaskItem({ task, onToggle, onDelete, onAddAttachment, onDeleteAt
       const past = isPast(due);
       
       if (past) {
-        setTimeLeftStr('¡Atrasada!');
+        const distance = formatDistanceToNow(due, { locale: es, addSuffix: true });
+        setTimeLeftStr(`Atrasada ${distance}`);
         setUrgencyClass('urgent-past');
         return;
       }
