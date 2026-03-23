@@ -142,12 +142,13 @@ async function scrapeAcademicManager(username, password) {
           if (detail && detail.dueDate) {
             // ── FILTRO DE EXPIRACIÓN (v14) ──────────────────────────────────
             const now = new Date();
-            const taskDate = new Date(detail.dueDate.replace(/-/g, '/')); // Compatibilidad de formato
+            const taskDate = new Date(detail.dueDate.replace(/-/g, '/')); 
+            const TWELVE_HOURS = 12 * 60 * 60 * 1000;
             
-            if (taskDate < now) {
-              console.log(`  ⌛ Ignorada (Expirada): ${detail.title} - ${detail.dueDate}`);
+            if (taskDate < (now.getTime() - TWELVE_HOURS)) {
+              console.log(`  ⌛ Ignorada (Expirada >12h): ${detail.title} - ${detail.dueDate}`);
             } else {
-              console.log(`  ✓ OK: ${detail.title} - ${detail.dueDate}`);
+              console.log(`  ✓ OK${taskDate < now ? ' (Expirada grace period)' : ''}: ${detail.title} - ${detail.dueDate}`);
               tasks.push(detail);
             }
           }
