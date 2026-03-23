@@ -116,7 +116,19 @@ const startTelegramPolling = async () => {
                     if (tasks.length === 0) {
                         await sendTelegram(config.botToken, chatId, "✅ No tienes tareas pendientes.");
                     } else {
-                        const list = tasks.map(t => `• *${t.title}* (ID: ${t.id}) [${t.category || 'General'}]`).join('\n');
+                        const list = tasks.map(t => {
+                            const due = new Date(t.dueDate);
+                            const diff = due - Date.now();
+                            const absDiff = Math.abs(diff);
+                            const isExpired = diff < 0;
+
+                            const hours = Math.floor(absDiff / (1000 * 60 * 60));
+                            const mins = Math.floor((absDiff % (1000 * 60 * 60)) / (1000 * 60));
+                            const timeStr = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+
+                            const status = isExpired ? `❌ *EXPIRADA* (hace ${timeStr})` : `⏳ *Faltan* ${timeStr}`;
+                            return `• ${status}: *${t.title}* (ID: ${t.id})`;
+                        }).join('\n');
                         await sendTelegram(config.botToken, chatId, `📋 *Tareas Pendientes:*\n\n${list}`);
                     }
                 }
