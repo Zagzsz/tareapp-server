@@ -1,10 +1,5 @@
 const puppeteer = require('puppeteer');
 
-const MAX_EVENTS_PER_SYNC = parseInt(process.env.ACADEMIC_MAX_EVENTS || '30', 10);
-const PRELOAD_WAIT_MS = parseInt(process.env.ACADEMIC_PRELOAD_WAIT_MS || '1800', 10);
-const MODAL_WAIT_MS = parseInt(process.env.ACADEMIC_MODAL_WAIT_MS || '1800', 10);
-const BLOCK_STYLES = process.env.ACADEMIC_BLOCK_STYLES === 'true';
-
 async function scrapeAcademicManager(username, password) {
   let browser;
   try {
@@ -13,25 +8,16 @@ async function scrapeAcademicManager(username, password) {
       args: [
         '--no-sandbox', '--disable-setuid-sandbox', '--single-process',
         '--no-zygote', '--disable-gpu', '--disable-dev-shm-usage',
-        '--disable-extensions', '--mute-audio', '--no-first-run',
-        '--disable-background-networking', '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows', '--disable-breakpad',
-        '--disable-component-update', '--disable-default-apps',
-        '--disable-domain-reliability', '--disable-sync', '--no-default-browser-check'
+        '--disable-extensions', '--mute-audio', '--no-first-run'
       ],
     });
 
     const page = await browser.newPage();
-    await page.setCacheEnabled(false);
 
     // Bloquear recursos pero permitir CSS para tener coordenadas reales
     await page.setRequestInterception(true);
     page.on('request', (req) => {
-      const blockedTypes = BLOCK_STYLES
-        ? ['image', 'font', 'media', 'stylesheet']
-        : ['image', 'font', 'media'];
-
-      if (blockedTypes.includes(req.resourceType())) {
+      if (['image', 'font', 'media'].includes(req.resourceType())) {
         req.abort();
       } else {
         req.continue();
@@ -39,8 +25,7 @@ async function scrapeAcademicManager(username, password) {
     });
 
     await page.setViewport({ width: 1280, height: 900 });
-    await page.setDefaultNavigationTimeout(45000);
-    await page.setDefaultTimeout(45000);
+    await page.setDefaultNavigationTimeout(60000);
 
     // ── 1. LOGIN ────────────────────────────────────────────────────────────
     console.log('Iniciando sesión...');
@@ -65,25 +50,24 @@ async function scrapeAcademicManager(username, password) {
     console.log('Obteniendo lista de tareas...');
     await page.goto(ACTIVIDADES_URL, { waitUntil: 'networkidle2' });
     await page.waitForSelector('.fc-event, .fc-daygrid-event, .calendar-event', { timeout: 30000 });
-    await new Promise(r => setTimeout(r, PRELOAD_WAIT_MS));
+    await new Promise(r => setTimeout(r, 3000));
 
     const eventCount = await page.evaluate(() =>
       document.querySelectorAll('.fc-event, .fc-daygrid-event, .calendar-event').length
     );
 
-    const eventsToProcess = Math.min(eventCount, MAX_EVENTS_PER_SYNC);
-    console.log(`Detectados ${eventCount} eventos. Procesando ${eventsToProcess} para evitar sobrecarga.`);
+    console.log(`Detectados ${eventCount} eventos. Iniciando extracción secuencial...`);
     const tasks = [];
 
     // ── 3. EXTRACCIÓN CON RECARGA (v13 Refresh Edition) ───────────────────
-    for (let i = 0; i < eventsToProcess; i++) {
-      console.log(`Procesando ${i + 1}/${eventsToProcess}...`);
+    for (let i = 0; i < eventCount; i++) {
+        console.log(`Procesando ${i + 1}/${eventCount}...`);
         try {
           // RECARGA COMPLETA PARA ESTADO FRESCO (Sugerencia del usuario)
           if (i > 0) {
             await page.goto(ACTIVIDADES_URL, { waitUntil: 'networkidle2' });
             await page.waitForSelector('.fc-event, .fc-daygrid-event, .calendar-event', { timeout: 30000 });
-            await new Promise(r => setTimeout(r, PRELOAD_WAIT_MS));
+            await new Promise(r => setTimeout(r, 2500));
           }
 
           // Obtener coordenadas del evento i
@@ -120,7 +104,7 @@ async function scrapeAcademicManager(username, password) {
           }
 
           // Carga AJAX interna del detalle
-          await new Promise(r => setTimeout(r, MODAL_WAIT_MS));
+          await new Promise(r => setTimeout(r, 2500));
           await waitForAjaxIdle(page, 4000);
 
           // Extraer datos (Pinpoint v14)
@@ -173,12 +157,9 @@ async function scrapeAcademicManager(username, password) {
         console.warn(`  Error en evento ${i + 1}:`, err.message);
       }
       // No necesitamos cerrar modal manualmente, la siguiente iteración recarga todo.
-
-      // Breve pausa para bajar picos de CPU/RAM en instancias pequeñas.
-      await new Promise(r => setTimeout(r, 120));
     }
 
-    console.log(`\n✅ Terminado: ${tasks.length}/${eventsToProcess} tareas extraídas.`);
+    console.log(`\n✅ Terminado: ${tasks.length}/${eventCount} tareas únicas extraídas.`);
     return tasks;
 
   } catch (error) {

@@ -7,9 +7,8 @@ const mysql = require('mysql2/promise');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { scrapeAcademicManager } = require('./scraper');
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-const { syncTaskToNotion } = require('./notionSync');
-const { syncAcademicTasks } = require('./academicSyncService');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -139,22 +138,21 @@ const startTelegramPolling = async () => {
                         await sendTelegram(config.botToken, chatId, "❌ No tienes credenciales guardadas. Hazlo en la app primero.");
                     } else {
                         try {
-                            const syncResult = await syncAcademicTasks({
-                              pool,
-                              academicUser: config.academicUser,
-                              academicPass: config.academicPass,
-                              source: 'telegram'
-                            });
-
-                            if (syncResult.busy) {
-                              await sendTelegram(config.botToken, chatId, `⏳ ${syncResult.message}`);
-                            } else {
-                              await sendTelegram(
-                                config.botToken,
-                                chatId,
-                                `✅ Sync lista. Halladas: ${syncResult.found}, Nuevas: ${syncResult.added}, Actualizadas: ${syncResult.updated}, Notion: ${syncResult.notionSynced}`
-                              );
+                            const academicTasks = await scrapeAcademicManager(config.academicUser, config.academicPass);
+                            let added = 0;
+                            for (const task of academicTasks) {
+                                const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
+                                const mysqlDate = task.dueDate;
+                                if (existing.length === 0) {
+                                    if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
+                                    await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
+                                    added++;
+                                } else {
+                                    const [updateRes] = await pool.query("UPDATE tasks SET dueDate = ? WHERE id = ?", [mysqlDate, existing[0].id]);
+                                    if (updateRes.changedRows > 0) await pool.query("DELETE FROM sent_notifications WHERE task_id = ?", [existing[0].id]);
+                                }
                             }
+                            await sendTelegram(config.botToken, chatId, `✅ Sync lista. Halladas: ${academicTasks.length}, Nuevas: ${added}`);
                         } catch (e) {
                             await sendTelegram(config.botToken, chatId, `❌ Error en sync: ${e.message}`);
                         }
@@ -267,18 +265,21 @@ discordClient.on('messageCreate', async (message) => {
 
             message.reply("⏳ Iniciando sincronización... te avisaré al terminar.");
 
-            const syncResult = await syncAcademicTasks({
-              pool,
-              academicUser: config.academicUser,
-              academicPass: config.academicPass,
-              source: 'discord'
-            });
-
-            if (syncResult.busy) {
-              return message.reply(`⏳ ${syncResult.message}`);
+            const academicTasks = await scrapeAcademicManager(config.academicUser, config.academicPass);
+            let added = 0;
+            for (const task of academicTasks) {
+                const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
+                const mysqlDate = task.dueDate;
+                if (existing.length === 0) {
+                    if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
+                    await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
+                    added++;
+                } else {
+                    const [updateRes] = await pool.query("UPDATE tasks SET dueDate = ? WHERE id = ?", [mysqlDate, existing[0].id]);
+                    if (updateRes.changedRows > 0) await pool.query("DELETE FROM sent_notifications WHERE task_id = ?", [existing[0].id]);
+                }
             }
-
-            message.reply(`✅ Sincronización finalizada.\n📦 Tareas encontradas: **${syncResult.found}**\n✨ Tareas nuevas: **${syncResult.added}**\n🔁 Tareas actualizadas: **${syncResult.updated}**\n🧠 Notion sincronizadas: **${syncResult.notionSynced}**`);
+            message.reply(`✅ Sincronización finalizada.\n📦 Tareas encontradas: **${academicTasks.length}**\n✨ Tareas nuevas: **${added}**`);
         } catch (err) {
             console.error('Error sync Discord:', err);
             message.reply(`❌ Error al sincronizar: ${err.message}`);
@@ -353,9 +354,7 @@ app.post('/api/tasks', async (req, res) => {
       'INSERT INTO tasks (title, description, category, dueDate, completed) VALUES (?, ?, ?, ?, ?)',
       [title, description, category, dueDate || null, completed ? 1 : 0]
     );
-    const createdTask = { id: result.insertId, title, description, category, dueDate, completed: Boolean(completed) };
-    const notionResult = await syncTaskToNotion(pool, createdTask, { upsert: true });
-    res.json({ ...createdTask, notion: notionResult });
+    res.json({ id: result.insertId, title, description, category, dueDate, completed });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error al crear la tarea' });
@@ -482,15 +481,13 @@ app.get('/api/settings', async (req, res) => {
 
 app.post('/api/settings', async (req, res) => {
   try {
-    const { botToken, chatId, academicUser, academicPass, discordWebhookUrl, discordRoleId, discordBotToken, notionToken, notionDatabaseId } = req.body;
+    const { botToken, chatId, academicUser, academicPass, discordWebhookUrl, discordRoleId, discordBotToken } = req.body;
     if (botToken !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('botToken', ?)", [botToken.replace(/\s+/g, '')]);
     if (chatId !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('chatId', ?)", [chatId.replace(/\s+/g, '')]);
     if (academicUser) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicUser', ?)", [academicUser.trim()]);
     if (academicPass) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicPass', ?)", [academicPass]);
     if (discordWebhookUrl !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('discordWebhookUrl', ?)", [discordWebhookUrl.replace(/\s+/g, '')]);
     if (discordRoleId !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('discordRoleId', ?)", [discordRoleId.replace(/\s+/g, '')]);
-    if (notionToken !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('notionToken', ?)", [notionToken.replace(/\s+/g, '')]);
-    if (notionDatabaseId !== undefined) await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('notionDatabaseId', ?)", [String(notionDatabaseId).trim()]);
     if (discordBotToken !== undefined) {
       const cleanDiscordBotToken = discordBotToken.replace(/\s+/g, '');
       await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('discordBotToken', ?)", [cleanDiscordBotToken]);
@@ -622,23 +619,35 @@ app.post('/api/sync-academic', async (req, res) => {
     await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicUser', ?)", [academicUser]);
     await pool.query("REPLACE INTO settings (setting_key, setting_value) VALUES ('academicPass', ?)", [academicPass]);
 
-    const syncResult = await syncAcademicTasks({
-      pool,
-      academicUser,
-      academicPass,
-      source: 'api'
-    });
+    const academicTasks = await scrapeAcademicManager(academicUser, academicPass);
+    
+    let addedCount = 0;
+    for (const task of academicTasks) {
+      // Verificar si ya existe una tarea con el mismo título para evitar duplicados
+      const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
+      const mysqlDate = task.dueDate;
+      
+        if (existing.length === 0) {
+          // Asegurar que la categoría exista en la tabla categories
+          if (task.category && task.category !== 'General') {
+            await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
+          }
 
-    if (syncResult.busy) {
-      return res.status(409).json({ error: syncResult.message, lastSyncMeta: syncResult.lastSyncMeta });
+          await pool.query(
+            "INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)",
+            [task.title, task.description, mysqlDate, task.category || 'General']
+          );
+          addedCount++;
+        } else {
+          const [updateRes] = await pool.query("UPDATE tasks SET dueDate = ? WHERE id = ?", [mysqlDate, existing[0].id]);
+          if (updateRes.changedRows > 0) await pool.query("DELETE FROM sent_notifications WHERE task_id = ?", [existing[0].id]);
+        }
     }
 
     res.json({ 
       message: 'Sincronización completada', 
-      found: syncResult.found,
-      added: syncResult.added,
-      updated: syncResult.updated,
-      notionSynced: syncResult.notionSynced
+      found: academicTasks.length,
+      added: addedCount 
     });
 
   } catch (error) {
