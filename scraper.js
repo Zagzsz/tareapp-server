@@ -1,8 +1,8 @@
 const puppeteer = require('puppeteer');
 
-const MAX_EVENTS_PER_SYNC = parseInt(process.env.ACADEMIC_MAX_EVENTS || '3', 10);
-const PRELOAD_WAIT_MS = parseInt(process.env.ACADEMIC_PRELOAD_WAIT_MS || '1500', 10);
-const MODAL_WAIT_MS = parseInt(process.env.ACADEMIC_MODAL_WAIT_MS || '1500', 10);
+const MAX_EVENTS_PER_SYNC = parseInt(process.env.ACADEMIC_MAX_EVENTS || '5', 10);
+const PRELOAD_WAIT_MS = parseInt(process.env.ACADEMIC_PRELOAD_WAIT_MS || '1800', 10);
+const MODAL_WAIT_MS = parseInt(process.env.ACADEMIC_MODAL_WAIT_MS || '1800', 10);
 const BLOCK_STYLES = process.env.ACADEMIC_BLOCK_STYLES === 'true';
 
 async function scrapeAcademicManager(username, password) {
@@ -11,16 +11,13 @@ async function scrapeAcademicManager(username, password) {
     browser = await puppeteer.launch({
       headless: "new",
       args: [
-        '--no-sandbox', '--disable-setuid-sandbox',
+        '--no-sandbox', '--disable-setuid-sandbox', '--single-process',
         '--no-zygote', '--disable-gpu', '--disable-dev-shm-usage',
         '--disable-extensions', '--mute-audio', '--no-first-run',
         '--disable-background-networking', '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows', '--disable-breakpad',
         '--disable-component-update', '--disable-default-apps',
-        '--disable-domain-reliability', '--disable-sync', '--no-default-browser-check',
-        '--disable-software-rasterizer', '--disable-renderer-backgrounding',
-        '--disable-client-side-phishing-detection', '--disable-popup-blocking',
-        '--eager-logging', '--v8-cache-options=off'
+        '--disable-domain-reliability', '--disable-sync', '--no-default-browser-check'
       ],
     });
 
@@ -42,14 +39,14 @@ async function scrapeAcademicManager(username, password) {
     });
 
     await page.setViewport({ width: 1280, height: 900 });
-    await page.setDefaultNavigationTimeout(30000);
-    await page.setDefaultTimeout(30000);
+    await page.setDefaultNavigationTimeout(45000);
+    await page.setDefaultTimeout(45000);
 
     // ── 1. LOGIN ────────────────────────────────────────────────────────────
     console.log('Iniciando sesión...');
     await page.goto('https://ueh.academic.lat/Autenticacion.aspx', {
       waitUntil: 'networkidle2',
-      timeout: 40000
+      timeout: 60000
     });
 
     await page.waitForSelector('#txtUsuario', { timeout: 30000 });
@@ -87,8 +84,8 @@ async function scrapeAcademicManager(username, password) {
           // RECARGA COMPLETA PARA ESTADO FRESCO (Sugerencia del usuario)
           // Solo recarga si no es el primer evento que procesamos (no el primer del rango)
           if (i !== startIndex) {
-            await page.goto(ACTIVIDADES_URL, { waitUntil: 'networkidle2', timeout: 35000 });
-            await page.waitForSelector('.fc-event, .fc-daygrid-event, .calendar-event', { timeout: 25000 });
+            await page.goto(ACTIVIDADES_URL, { waitUntil: 'networkidle2' });
+            await page.waitForSelector('.fc-event, .fc-daygrid-event, .calendar-event', { timeout: 30000 });
             await new Promise(r => setTimeout(r, PRELOAD_WAIT_MS));
           }
 
@@ -127,7 +124,7 @@ async function scrapeAcademicManager(username, password) {
 
           // Carga AJAX interna del detalle
           await new Promise(r => setTimeout(r, MODAL_WAIT_MS));
-          await waitForAjaxIdle(page, 3000);
+          await waitForAjaxIdle(page, 4000);
 
           // Extraer datos (Pinpoint v14)
           const detail = await page.evaluate(() => {
@@ -181,7 +178,7 @@ async function scrapeAcademicManager(username, password) {
       // No necesitamos cerrar modal manualmente, la siguiente iteración recarga todo.
 
       // Breve pausa para bajar picos de CPU/RAM en instancias pequeñas.
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise(r => setTimeout(r, 120));
     }
 
     console.log(`\n✅ Terminado: ${tasks.length}/${eventsToProcess} tareas extraídas.`);
