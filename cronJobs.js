@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { syncTaskToNotion } = require('./notionSync');
+const { syncAcademicTasks } = require('./academicSyncService');
 
 function initCronJobs(pool) {
   // Generador de umbrales dinámicos idéntico al del Frontend
@@ -119,34 +119,20 @@ function initCronJobs(pool) {
 
       if (!config.academicUser || !config.academicPass) return;
 
-      const { scrapeAcademicManager } = require('./scraper');
-      const academicTasks = await scrapeAcademicManager(config.academicUser, config.academicPass);
-      
-      let addedCount = 0;
-      let notionSynced = 0;
-      for (const task of academicTasks) {
-        const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
-        const mysqlDate = task.dueDate;
-        let taskId = null;
-        if (existing.length === 0) {
-          if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
-          const [insertRes] = await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
-          taskId = insertRes.insertId;
-          addedCount++;
-        } else {
-          taskId = existing[0].id;
-          const [updateRes] = await pool.query("UPDATE tasks SET dueDate = ? WHERE id = ?", [mysqlDate, existing[0].id]);
-          if (updateRes.changedRows > 0) await pool.query("DELETE FROM sent_notifications WHERE task_id = ?", [existing[0].id]);
-        }
+      const syncResult = await syncAcademicTasks({
+        pool,
+        academicUser: config.academicUser,
+        academicPass: config.academicPass,
+        source: 'cron'
+      });
 
-        if (taskId) {
-          const [taskRows] = await pool.query('SELECT id, title, description, category, dueDate, completed FROM tasks WHERE id = ?', [taskId]);
-          if (taskRows.length > 0) {
-            const notionResult = await syncTaskToNotion(pool, taskRows[0], { upsert: true });
-            if (notionResult.synced) notionSynced++;
-          }
-        }
+      if (syncResult.busy) {
+        console.log(`⏳ Cron Sync omitido: ${syncResult.message}`);
+        return;
       }
+
+      const addedCount = syncResult.added;
+      const notionSynced = syncResult.notionSynced;
 
       console.log(`✅ Sincronización automática terminada. Nuevas: ${addedCount}, Notion: ${notionSynced}`);
       
