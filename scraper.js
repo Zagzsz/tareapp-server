@@ -1,6 +1,6 @@
 const puppeteer = require('puppeteer');
 
-const MAX_EVENTS_PER_SYNC = parseInt(process.env.ACADEMIC_MAX_EVENTS || '5', 10);
+const MAX_EVENTS_PER_SYNC = parseInt(process.env.ACADEMIC_MAX_EVENTS || '30', 10);
 const PRELOAD_WAIT_MS = parseInt(process.env.ACADEMIC_PRELOAD_WAIT_MS || '1800', 10);
 const MODAL_WAIT_MS = parseInt(process.env.ACADEMIC_MODAL_WAIT_MS || '1800', 10);
 const BLOCK_STYLES = process.env.ACADEMIC_BLOCK_STYLES === 'true';
