@@ -21,7 +21,7 @@ async function syncAcademicTasks({ pool, academicUser, academicPass, source = 'm
 
     let added = 0;
     let updated = 0;
-    let notionSynced = 0;
+    const taskIdsForNotion = []; // Guardar IDs para sincronizar EN BACKGROUND
 
     for (const task of academicTasks) {
       const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
@@ -50,11 +50,7 @@ async function syncAcademicTasks({ pool, academicUser, academicPass, source = 'm
       }
 
       if (taskId) {
-        const [taskRows] = await pool.query('SELECT id, title, description, category, dueDate, completed FROM tasks WHERE id = ?', [taskId]);
-        if (taskRows.length > 0) {
-          const notionResult = await syncTaskToNotion(pool, taskRows[0], { upsert: true });
-          if (notionResult.synced) notionSynced++;
-        }
+        taskIdsForNotion.push(taskId);
       }
     }
 
@@ -65,9 +61,33 @@ async function syncAcademicTasks({ pool, academicUser, academicPass, source = 'm
       found: academicTasks.length,
       added,
       updated,
-      notionSynced,
+      notionSynced: 0, // Se actualiza en background
       success: true
     };
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    // WEBHOOK: Sincronizar Notion EN BACKGROUND (no-bloqueante)
+    // ════════════════════════════════════════════════════════════════════════════════
+    setImmediate(async () => {
+      try {
+        let notionSyncedCount = 0;
+        for (const taskId of taskIdsForNotion) {
+          try {
+            const [taskRows] = await pool.query('SELECT id, title, description, category, dueDate, completed FROM tasks WHERE id = ?', [taskId]);
+            if (taskRows.length > 0) {
+              const notionResult = await syncTaskToNotion(pool, taskRows[0], { upsert: true });
+              if (notionResult.synced) notionSyncedCount++;
+            }
+          } catch (notionErr) {
+            console.warn(`  ⚠ Error sincronizando tarea ${taskId} con Notion:`, notionErr.message);
+          }
+        }
+        lastSyncMeta.notionSynced = notionSyncedCount;
+        console.log(`✅ Webhook Notion completado: ${notionSyncedCount}/${taskIdsForNotion.length} sincronizadas`);
+      } catch (webhookErr) {
+        console.error('❌ Error crítico en webhook Notion:', webhookErr.message);
+      }
+    });
 
     return {
       busy: false,
