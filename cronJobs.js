@@ -1,4 +1,5 @@
 const cron = require('node-cron');
+const { syncTaskToNotion } = require('./notionSync');
 
 function initCronJobs(pool) {
   // Generador de umbrales dinámicos idéntico al del Frontend
@@ -122,23 +123,35 @@ function initCronJobs(pool) {
       const academicTasks = await scrapeAcademicManager(config.academicUser, config.academicPass);
       
       let addedCount = 0;
+      let notionSynced = 0;
       for (const task of academicTasks) {
         const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
         const mysqlDate = task.dueDate;
+        let taskId = null;
         if (existing.length === 0) {
           if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
-          await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
+          const [insertRes] = await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
+          taskId = insertRes.insertId;
           addedCount++;
         } else {
+          taskId = existing[0].id;
           const [updateRes] = await pool.query("UPDATE tasks SET dueDate = ? WHERE id = ?", [mysqlDate, existing[0].id]);
           if (updateRes.changedRows > 0) await pool.query("DELETE FROM sent_notifications WHERE task_id = ?", [existing[0].id]);
         }
+
+        if (taskId) {
+          const [taskRows] = await pool.query('SELECT id, title, description, category, dueDate, completed FROM tasks WHERE id = ?', [taskId]);
+          if (taskRows.length > 0) {
+            const notionResult = await syncTaskToNotion(pool, taskRows[0], { upsert: true });
+            if (notionResult.synced) notionSynced++;
+          }
+        }
       }
 
-      console.log(`✅ Sincronización automática terminada. Nuevas: ${addedCount}`);
+      console.log(`✅ Sincronización automática terminada. Nuevas: ${addedCount}, Notion: ${notionSynced}`);
       
       if (config.botToken && config.chatId) {
-        const syncMessage = `🎓 *Sincronización Automática Finalizada*\nSe revisó tu portal y se añadieron *${addedCount}* tareas nuevas.`;
+        const syncMessage = `🎓 *Sincronización Automática Finalizada*\nSe revisó tu portal y se añadieron *${addedCount}* tareas nuevas.\n🧠 Notion sincronizadas: *${notionSynced}*.`;
         await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -147,7 +160,7 @@ function initCronJobs(pool) {
       }
 
       if (config.discordWebhookUrl) {
-        const syncMessageDiscord = `🎓 **Sincronización Automática Finalizada**\nSe revisó tu portal y se añadieron **${addedCount}** tareas nuevas.`;
+        const syncMessageDiscord = `🎓 **Sincronización Automática Finalizada**\nSe revisó tu portal y se añadieron **${addedCount}** tareas nuevas.\n🧠 Notion sincronizadas: **${notionSynced}**.`;
         const body = { content: syncMessageDiscord };
         if (config.discordRoleId) {
           body.content = `<@&${config.discordRoleId}> ${syncMessageDiscord}`;

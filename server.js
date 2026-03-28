@@ -9,8 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const { scrapeAcademicManager } = require('./scraper');
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-
-const NOTION_API_VERSION = '2022-06-28';
+const { syncTaskToNotion } = require('./notionSync');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -142,19 +141,31 @@ const startTelegramPolling = async () => {
                         try {
                             const academicTasks = await scrapeAcademicManager(config.academicUser, config.academicPass);
                             let added = 0;
+                      let notionSynced = 0;
                             for (const task of academicTasks) {
                                 const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
                                 const mysqlDate = task.dueDate;
+                        let taskId = null;
                                 if (existing.length === 0) {
                                     if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
-                                    await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
+                          const [insertRes] = await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
+                          taskId = insertRes.insertId;
                                     added++;
                                 } else {
+                          taskId = existing[0].id;
                                     const [updateRes] = await pool.query("UPDATE tasks SET dueDate = ? WHERE id = ?", [mysqlDate, existing[0].id]);
                                     if (updateRes.changedRows > 0) await pool.query("DELETE FROM sent_notifications WHERE task_id = ?", [existing[0].id]);
                                 }
+
+                        if (taskId) {
+                          const [taskRows] = await pool.query('SELECT id, title, description, category, dueDate, completed FROM tasks WHERE id = ?', [taskId]);
+                          if (taskRows.length > 0) {
+                            const notionResult = await syncTaskToNotion(pool, taskRows[0], { upsert: true });
+                            if (notionResult.synced) notionSynced++;
+                          }
+                        }
                             }
-                            await sendTelegram(config.botToken, chatId, `✅ Sync lista. Halladas: ${academicTasks.length}, Nuevas: ${added}`);
+                      await sendTelegram(config.botToken, chatId, `✅ Sync lista. Halladas: ${academicTasks.length}, Nuevas: ${added}, Notion: ${notionSynced}`);
                         } catch (e) {
                             await sendTelegram(config.botToken, chatId, `❌ Error en sync: ${e.message}`);
                         }
@@ -269,19 +280,31 @@ discordClient.on('messageCreate', async (message) => {
 
             const academicTasks = await scrapeAcademicManager(config.academicUser, config.academicPass);
             let added = 0;
+            let notionSynced = 0;
             for (const task of academicTasks) {
                 const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
                 const mysqlDate = task.dueDate;
+              let taskId = null;
                 if (existing.length === 0) {
                     if (task.category && task.category !== 'General') await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
-                    await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
+                const [insertRes] = await pool.query("INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)", [task.title, task.description, mysqlDate, task.category || 'General']);
+                taskId = insertRes.insertId;
                     added++;
                 } else {
+                taskId = existing[0].id;
                     const [updateRes] = await pool.query("UPDATE tasks SET dueDate = ? WHERE id = ?", [mysqlDate, existing[0].id]);
                     if (updateRes.changedRows > 0) await pool.query("DELETE FROM sent_notifications WHERE task_id = ?", [existing[0].id]);
                 }
+
+              if (taskId) {
+                const [taskRows] = await pool.query('SELECT id, title, description, category, dueDate, completed FROM tasks WHERE id = ?', [taskId]);
+                if (taskRows.length > 0) {
+                  const notionResult = await syncTaskToNotion(pool, taskRows[0], { upsert: true });
+                  if (notionResult.synced) notionSynced++;
+                }
+              }
             }
-            message.reply(`✅ Sincronización finalizada.\n📦 Tareas encontradas: **${academicTasks.length}**\n✨ Tareas nuevas: **${added}**`);
+            message.reply(`✅ Sincronización finalizada.\n📦 Tareas encontradas: **${academicTasks.length}**\n✨ Tareas nuevas: **${added}**\n🧠 Notion sincronizadas: **${notionSynced}**`);
         } catch (err) {
             console.error('Error sync Discord:', err);
             message.reply(`❌ Error al sincronizar: ${err.message}`);
@@ -328,185 +351,6 @@ async function sendDiscord(webhookUrl, content, roleId = null) {
     } catch (e) { console.error('Error en sendDiscord:', e.message); }
 }
 
-async function syncTaskToNotion(task) {
-  try {
-    const [settings] = await pool.query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('notionToken', 'notionDatabaseId')");
-    const config = {};
-    settings.forEach(s => config[s.setting_key] = s.setting_value);
-
-    const notionToken = (config.notionToken || '').trim();
-    const notionDatabaseId = (config.notionDatabaseId || '').trim();
-
-    if (!notionToken || !notionDatabaseId) {
-      return { synced: false, skipped: true, reason: 'Notion no configurado' };
-    }
-
-    const headers = {
-      'Authorization': `Bearer ${notionToken}`,
-      'Notion-Version': NOTION_API_VERSION,
-      'Content-Type': 'application/json'
-    };
-
-    const dbRes = await fetch(`https://api.notion.com/v1/databases/${notionDatabaseId}`, { headers });
-    if (!dbRes.ok) {
-      const detail = await dbRes.text();
-      throw new Error(`No se pudo leer la base de Notion (${dbRes.status}): ${detail}`);
-    }
-
-    const dbData = await dbRes.json();
-    const properties = dbData.properties || {};
-    const propertyEntries = Object.entries(properties);
-
-    const findProperty = (typeList, preferredNames = [], fallbackMatch = () => false) => {
-      const normalizedPreferred = preferredNames.map(n => n.toLowerCase());
-
-      for (const [name, meta] of propertyEntries) {
-        if (!typeList.includes(meta.type)) continue;
-        if (normalizedPreferred.includes(name.toLowerCase())) {
-          return [name, meta];
-        }
-      }
-
-      for (const [name, meta] of propertyEntries) {
-        if (!typeList.includes(meta.type)) continue;
-        if (fallbackMatch(name.toLowerCase(), meta)) {
-          return [name, meta];
-        }
-      }
-
-      return null;
-    };
-
-    const titleProp = findProperty(['title'], ['Homework Name', 'Nombre Tarea', 'Tarea']) || propertyEntries.find(([, value]) => value.type === 'title');
-
-    if (!titleProp) {
-      throw new Error('La base de Notion no tiene propiedad de tipo title');
-    }
-
-    const [titlePropertyName] = titleProp;
-    const notionProperties = {
-      [titlePropertyName]: {
-        title: [{ type: 'text', text: { content: String(task.title || 'Sin titulo').slice(0, 2000) } }]
-      }
-    };
-
-    const categoryProp = findProperty(
-      ['select', 'multi_select'],
-      ['Class', 'Clase', 'Materia', 'Category', 'Categoria', 'Categoría', 'Area', 'Área'],
-      (name) => name.includes('class') || name.includes('clase') || name.includes('materia') || name.includes('category') || name.includes('categoria') || name.includes('area')
-    );
-
-    if (categoryProp && task.category) {
-      const [categoryPropName, categoryPropMeta] = categoryProp;
-      if (categoryPropMeta.type === 'select') {
-        notionProperties[categoryPropName] = { select: { name: String(task.category).slice(0, 100) } };
-      } else {
-        notionProperties[categoryPropName] = { multi_select: [{ name: String(task.category).slice(0, 100) }] };
-      }
-    }
-
-    const dueDateProp = findProperty(
-      ['date'],
-      ['Due Date', 'Fecha Entrega', 'Fecha de Entrega', 'Vence'],
-      (name) => name.includes('due') || name.includes('fecha') || name.includes('venc') || name.includes('entrega')
-    );
-
-    if (dueDateProp && task.dueDate) {
-      const [dueDatePropName] = dueDateProp;
-      notionProperties[dueDatePropName] = { date: { start: new Date(task.dueDate).toISOString() } };
-    }
-
-    const completedProp = findProperty(
-      ['checkbox'],
-      ['Completed', 'Completada', 'Done'],
-      (name) => name.includes('completed') || name.includes('complet') || name.includes('done')
-    );
-
-    if (completedProp) {
-      const [completedPropName] = completedProp;
-      notionProperties[completedPropName] = { checkbox: Boolean(task.completed) };
-    }
-
-    const statusProp = findProperty(
-      ['status', 'select'],
-      ['Status', 'Estado'],
-      (name) => name.includes('status') || name.includes('estado')
-    );
-
-    if (statusProp) {
-      const [statusPropName, statusMeta] = statusProp;
-      const preferredDone = ['done', 'completada', 'complete', 'finalizada', 'listo'];
-      const preferredOpen = ['not started', 'to do', 'todo', 'pendiente', 'submit', 'in progress', 'progreso'];
-
-      let chosenName = null;
-      if (statusMeta.type === 'status' && statusMeta.status && Array.isArray(statusMeta.status.options)) {
-        const optionNames = statusMeta.status.options.map(opt => opt.name);
-        const matchSet = task.completed ? preferredDone : preferredOpen;
-        chosenName = optionNames.find(name => matchSet.some(p => name.toLowerCase().includes(p)));
-        if (!chosenName && optionNames.length > 0) {
-          chosenName = task.completed ? optionNames[optionNames.length - 1] : optionNames[0];
-        }
-        if (chosenName) {
-          notionProperties[statusPropName] = { status: { name: chosenName } };
-        }
-      } else if (statusMeta.type === 'select') {
-        notionProperties[statusPropName] = { select: { name: task.completed ? 'Done' : 'Not Started' } };
-      }
-    }
-
-    const notesProp = findProperty(
-      ['rich_text'],
-      ['Notes / Instructions', 'Notes', 'Instrucciones', 'Descripcion', 'Descripción'],
-      (name) => name.includes('note') || name.includes('instruction') || name.includes('instruccion') || name.includes('descripcion')
-    );
-
-    if (notesProp && task.description && String(task.description).trim()) {
-      const [notesPropName] = notesProp;
-      notionProperties[notesPropName] = {
-        rich_text: [{
-          type: 'text',
-          text: { content: String(task.description).slice(0, 2000) }
-        }]
-      };
-    }
-
-    const pagePayload = {
-      parent: { database_id: notionDatabaseId },
-      properties: notionProperties
-    };
-
-    if (!notesProp && task.description && String(task.description).trim()) {
-      pagePayload.children = [{
-        object: 'block',
-        type: 'paragraph',
-        paragraph: {
-          rich_text: [{
-            type: 'text',
-            text: { content: String(task.description).slice(0, 2000) }
-          }]
-        }
-      }];
-    }
-
-    const createRes = await fetch('https://api.notion.com/v1/pages', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(pagePayload)
-    });
-
-    if (!createRes.ok) {
-      const detail = await createRes.text();
-      throw new Error(`Error creando pagina en Notion (${createRes.status}): ${detail}`);
-    }
-
-    const createdPage = await createRes.json();
-    return { synced: true, notionPageId: createdPage.id };
-  } catch (e) {
-    console.error('Error sincronizando tarea con Notion:', e.message);
-    return { synced: false, error: e.message };
-  }
-}
-
 // Iniciar Bots al arrancar
 startTelegramPolling();
 startDiscordBot();
@@ -536,7 +380,7 @@ app.post('/api/tasks', async (req, res) => {
       [title, description, category, dueDate || null, completed ? 1 : 0]
     );
     const createdTask = { id: result.insertId, title, description, category, dueDate, completed: Boolean(completed) };
-    const notionResult = await syncTaskToNotion(createdTask);
+    const notionResult = await syncTaskToNotion(pool, createdTask, { upsert: true });
     res.json({ ...createdTask, notion: notionResult });
   } catch (error) {
     console.error(error);
@@ -807,10 +651,12 @@ app.post('/api/sync-academic', async (req, res) => {
     const academicTasks = await scrapeAcademicManager(academicUser, academicPass);
     
     let addedCount = 0;
+    let notionSynced = 0;
     for (const task of academicTasks) {
       // Verificar si ya existe una tarea con el mismo título para evitar duplicados
       const [existing] = await pool.query('SELECT id FROM tasks WHERE title = ?', [task.title]);
       const mysqlDate = task.dueDate;
+      let taskId = null;
       
         if (existing.length === 0) {
           // Asegurar que la categoría exista en la tabla categories
@@ -818,21 +664,32 @@ app.post('/api/sync-academic', async (req, res) => {
             await pool.query('INSERT IGNORE INTO categories (name) VALUES (?)', [task.category]);
           }
 
-          await pool.query(
+          const [insertRes] = await pool.query(
             "INSERT INTO tasks (title, description, dueDate, category) VALUES (?, ?, ?, ?)",
             [task.title, task.description, mysqlDate, task.category || 'General']
           );
+          taskId = insertRes.insertId;
           addedCount++;
         } else {
+          taskId = existing[0].id;
           const [updateRes] = await pool.query("UPDATE tasks SET dueDate = ? WHERE id = ?", [mysqlDate, existing[0].id]);
           if (updateRes.changedRows > 0) await pool.query("DELETE FROM sent_notifications WHERE task_id = ?", [existing[0].id]);
+        }
+
+        if (taskId) {
+          const [taskRows] = await pool.query('SELECT id, title, description, category, dueDate, completed FROM tasks WHERE id = ?', [taskId]);
+          if (taskRows.length > 0) {
+            const notionResult = await syncTaskToNotion(pool, taskRows[0], { upsert: true });
+            if (notionResult.synced) notionSynced++;
+          }
         }
     }
 
     res.json({ 
       message: 'Sincronización completada', 
       found: academicTasks.length,
-      added: addedCount 
+      added: addedCount,
+      notionSynced
     });
 
   } catch (error) {
