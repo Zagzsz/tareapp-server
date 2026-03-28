@@ -10,6 +10,8 @@ export function SettingsModal({ onClose }) {
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
   const [discordRoleId, setDiscordRoleId] = useState('');
   const [discordBotToken, setDiscordBotToken] = useState('');
+  const [notionToken, setNotionToken] = useState('');
+  const [notionDatabaseId, setNotionDatabaseId] = useState('');
   const [academicUser, setAcademicUser] = useState('');
   const [academicPass, setAcademicPass] = useState('');
   const [isSaved, setIsSaved] = useState(false);
@@ -28,6 +30,8 @@ export function SettingsModal({ onClose }) {
           if (data.discordWebhookUrl) setDiscordWebhookUrl(data.discordWebhookUrl);
           if (data.discordRoleId) setDiscordRoleId(data.discordRoleId);
           if (data.discordBotToken) setDiscordBotToken(data.discordBotToken);
+          if (data.notionToken) setNotionToken(data.notionToken);
+          if (data.notionDatabaseId) setNotionDatabaseId(data.notionDatabaseId);
           if (data.academicUser) setAcademicUser(data.academicUser);
           if (data.academicPass) setAcademicPass(data.academicPass);
           return;
@@ -45,6 +49,8 @@ export function SettingsModal({ onClose }) {
           setDiscordWebhookUrl(parsed.discordWebhookUrl || '');
           setDiscordRoleId(parsed.discordRoleId || '');
           setDiscordBotToken(parsed.discordBotToken || '');
+          setNotionToken(parsed.notionToken || '');
+          setNotionDatabaseId(parsed.notionDatabaseId || '');
           setAcademicUser(parsed.academicUser || '');
           setAcademicPass(parsed.academicPass || '');
         }
@@ -140,11 +146,41 @@ export function SettingsModal({ onClose }) {
     }
   };
 
+  const handleSaveNotion = async (e) => {
+    e.preventDefault();
+    try {
+      const trimmedToken = notionToken.replace(/\s+/g, '');
+      const trimmedDbId = notionDatabaseId.trim();
+
+      const savedConfig = localStorage.getItem(TELEGRAM_CONFIG_KEY);
+      const configObj = savedConfig ? JSON.parse(savedConfig) : {};
+      const newConfig = { ...configObj, notionToken: trimmedToken, notionDatabaseId: trimmedDbId };
+      localStorage.setItem(TELEGRAM_CONFIG_KEY, JSON.stringify(newConfig));
+
+      try {
+        await fetch(`${API_URL}/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notionToken: trimmedToken, notionDatabaseId: trimmedDbId })
+        });
+      } catch (apiErr) {
+        console.warn('No se pudo guardar Notion en el servidor:', apiErr);
+      }
+
+      setIsSaved(true);
+      setTimeout(() => setIsSaved(false), 1500);
+      alert('Configuración de Notion guardada.');
+    } catch (error) {
+      console.error('Error guardando config Notion:', error);
+      alert('Error guardando la configuración');
+    }
+  };
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Configuración de Telegram 🚀</h2>
+          <h2>Configuración de Integraciones 🚀</h2>
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
         
@@ -231,6 +267,44 @@ export function SettingsModal({ onClose }) {
 
               <button type="submit" className={`btn primary ${isSaved ? 'success' : ''}`}>
                 {isSaved ? '¡Guardado!' : 'Guardar Discord'}
+              </button>
+            </form>
+          </section>
+
+          <hr className="settings-divider" />
+
+          <section className="settings-section">
+            <h3>Sincronización con Notion 🧠</h3>
+            <form onSubmit={handleSaveNotion} className="settings-form">
+              <div className="form-group">
+                <label htmlFor="notionToken">Integration Token de Notion</label>
+                <input
+                  id="notionToken"
+                  type="password"
+                  value={notionToken}
+                  onChange={(e) => setNotionToken(e.target.value)}
+                  placeholder="secret_xxxxxxxxxxxxxxxxxxxxxxxxx"
+                  className="settings-input"
+                />
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="notionDatabaseId">Database ID de Notion</label>
+                <input
+                  id="notionDatabaseId"
+                  type="text"
+                  value={notionDatabaseId}
+                  onChange={(e) => setNotionDatabaseId(e.target.value)}
+                  placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  className="settings-input"
+                />
+                <small style={{ color: '#888', fontSize: '0.8rem', marginTop: '4px', display: 'block' }}>
+                  Comparte la base de datos con tu integración para permitir escritura.
+                </small>
+              </div>
+
+              <button type="submit" className={`btn primary ${isSaved ? 'success' : ''}`}>
+                {isSaved ? '¡Guardado!' : 'Guardar Notion'}
               </button>
             </form>
           </section>
