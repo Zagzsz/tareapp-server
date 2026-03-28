@@ -72,15 +72,18 @@ async function scrapeAcademicManager(username, password) {
     );
 
     const eventsToProcess = Math.min(eventCount, MAX_EVENTS_PER_SYNC);
-    console.log(`Detectados ${eventCount} eventos. Procesando ${eventsToProcess} para evitar sobrecarga.`);
+    const startIndex = Math.max(0, eventCount - eventsToProcess);
+    console.log(`Detectados ${eventCount} eventos. Procesando últimas ${eventsToProcess} (más recientes) para evitar sobrecarga.`);
     const tasks = [];
 
     // ── 3. EXTRACCIÓN CON RECARGA (v13 Refresh Edition) ───────────────────
-    for (let i = 0; i < eventsToProcess; i++) {
-      console.log(`Procesando ${i + 1}/${eventsToProcess}...`);
+    for (let i = startIndex; i < eventCount; i++) {
+      const taskNum = i - startIndex + 1;
+      console.log(`Procesando ${taskNum}/${eventsToProcess}...`);
         try {
           // RECARGA COMPLETA PARA ESTADO FRESCO (Sugerencia del usuario)
-          if (i > 0) {
+          // Solo recarga si no es el primer evento que procesamos (no el primer del rango)
+          if (i !== startIndex) {
             await page.goto(ACTIVIDADES_URL, { waitUntil: 'networkidle2' });
             await page.waitForSelector('.fc-event, .fc-daygrid-event, .calendar-event', { timeout: 30000 });
             await new Promise(r => setTimeout(r, PRELOAD_WAIT_MS));
@@ -98,7 +101,7 @@ async function scrapeAcademicManager(username, password) {
           }, i);
 
           if (!rect) {
-            console.warn(`  ⚠ No se pudo localizar evento ${i + 1} tras recarga.`);
+            console.warn(`  ⚠ No se pudo localizar evento ${taskNum} tras recarga.`);
             continue;
           }
 
@@ -109,13 +112,13 @@ async function scrapeAcademicManager(username, password) {
           const modalSelector = '.modal-content, .ui-dialog, [id*="pnlDetalleActividad"]';
           const modalVisible = await page.waitForSelector(modalSelector, { visible: true, timeout: 10000 })
             .catch(async () => {
-              console.log(`  ↻ Re-intento de clic en evento ${i + 1}...`);
+              console.log(`  ↻ Re-intento de clic en evento ${taskNum}...`);
               await page.mouse.click(rect.x, rect.y);
               return await page.waitForSelector(modalSelector, { visible: true, timeout: 5000 }).catch(() => null);
             });
   
           if (!modalVisible) {
-            console.log(`  ✗ Tarea ${i + 1} no abrió. Saltando.`);
+            console.log(`  ✗ Tarea ${taskNum} no abrió. Saltando.`);
             continue;
           }
 
@@ -170,7 +173,7 @@ async function scrapeAcademicManager(username, password) {
           }
 
       } catch (err) {
-        console.warn(`  Error en evento ${i + 1}:`, err.message);
+        console.warn(`  Error en evento ${taskNum}:`, err.message);
       }
       // No necesitamos cerrar modal manualmente, la siguiente iteración recarga todo.
 
